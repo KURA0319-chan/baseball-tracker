@@ -4,6 +4,8 @@ import pandas as pd
 from datetime import datetime
 import time
 import random
+import json  # 👈 新增這行
+import os    # 👈 新增這行
 
 # ==========================================
 # 專屬設定 & 規定門檻設定 (MLB 標準)
@@ -12,8 +14,10 @@ SERVICE_ACCOUNT_FILE = 'baseball.json'
 SHEET_NAME = '棒球數據資料庫'
 TEAMS = ["LAA", "LAD"]
 
-QUALIFY_PA = 31   
-QUALIFY_IP = 10.0 
+# ✨ 加入大獎所需的動態門檻設定
+TOTAL_GAMES = 10  
+QUALIFY_PA = TOTAL_GAMES * 1.0   
+QUALIFY_IP = TOTAL_GAMES * 0.33  
 
 SEASONS = [f"Season {i}" for i in range(1, 11)]
 GAME_STAGES = [f"例行賽 G{i}" for i in range(1, 11)] + [f"世界大賽 G{i}" for i in range(1, 8)]
@@ -24,8 +28,44 @@ pitch_keys = ['ip_f', 'ip_o', 'bf_p', 'so_p', 'bb_p', 'r_p', 'er_p', 'hp_p', 'hr
 if 'clear_bat' not in st.session_state: st.session_state.clear_bat = False
 if 'clear_pitch' not in st.session_state: st.session_state.clear_pitch = False
 
+# ✨ 戰術板記憶體初始化
+# ==========================================
+# ✨ 本地端硬碟記憶體 (Long-Term Memory)
+# ==========================================
+SETTINGS_FILE = "settings.json"
+
+def load_settings():
+    if os.path.exists(SETTINGS_FILE):
+        try:
+            with open(SETTINGS_FILE, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except: return {}
+    return {}
+
+def save_settings():
+    data = {
+        "lineups": st.session_state.lineups,
+        "pitchers": st.session_state.pitchers,
+        "default_season": st.session_state.get("f_season", "十年總成績")
+    }
+    try:
+        with open(SETTINGS_FILE, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False, indent=4)
+    except: pass
+
+# --- 初始化並讀取硬碟紀錄 ---
+saved_data = load_settings()
+
+if 'lineups' not in st.session_state:
+    st.session_state.lineups = saved_data.get("lineups", {'LAA': ["" for _ in range(9)], 'LAD': ["" for _ in range(9)]})
+if 'pitchers' not in st.session_state:
+    st.session_state.pitchers = saved_data.get("pitchers", {'LAA': "", 'LAD': ""})
+if 'default_season' not in st.session_state:
+    st.session_state.default_season = saved_data.get("default_season", "十年總成績")
+
 if st.session_state.clear_bat:
     for key in bat_keys: st.session_state[key] = 0
+    st.session_state.clear_bat = False
     st.session_state.clear_bat = False 
 
 if st.session_state.clear_pitch:
@@ -35,15 +75,8 @@ if st.session_state.clear_pitch:
 @st.cache_resource
 def get_sheet():
     try:
-        # 1. 如果在雲端 (有設定 secrets)，就從雲端保險箱讀取密鑰
-        if "gcp_service_account" in st.secrets:
-            creds_dict = dict(st.secrets["gcp_service_account"])
-            gc = gspread.service_account_from_dict(creds_dict)
-            return gc.open(SHEET_NAME)
-        # 2. 如果在你自己電腦上，就照舊讀取實體檔案
-        else:
-            gc = gspread.service_account(filename=SERVICE_ACCOUNT_FILE)
-            return gc.open(SHEET_NAME)
+        gc = gspread.service_account(filename=SERVICE_ACCOUNT_FILE)
+        return gc.open(SHEET_NAME)
     except Exception as e:
         st.error(f"連線失敗：{e}")
         return None
@@ -102,6 +135,11 @@ def get_career_stats():
                 return 0.0
             # ✨ 將 OPS+ 強制轉為整數 (去除小數點) ✨
             df_b_agg['OPS+'] = df_b_agg.apply(calc_ops_plus, axis=1).round(0).astype(int)
+            
+            # ✨ 新增 eWAR 計算
+            # 拔除 max(0)，容許出現負數 WAR
+            df_b_agg['eWAR'] = df_b_agg.apply(lambda r: ((r['OPS+'] - 80) / 100) * (r['打席'] / 20), axis=1)
+            
             st.session_state.df_b_raw = df_b 
             
     except Exception as e: error_msg += f"打擊計算異常: {e}\n"
@@ -130,6 +168,11 @@ def get_career_stats():
             df_p_agg['HR/9'] = (df_p_agg['被全壘打'] * 9) / ip_calc.replace(0, 1)
             df_p_agg['K/BB'] = (df_p_agg['奪三振'] / df_p_agg['四壞球'].replace(0, 1)).fillna(df_p_agg['奪三振'])
             
+            # ✨ 新增 混合真實防禦率(TRA) 與 eWAR 計算
+            df_p_agg['TRA'] = (df_p_agg['ERA'] + df_p_agg['FIP']) / 2.0
+            # 拔除 max(0)，容許出現負數 WAR
+            df_p_agg['eWAR'] = df_p_agg.apply(lambda r: ((5.00 - r['TRA']) / 1.5) * (r['實際局數'] / 10), axis=1)
+            
             st.session_state.df_p_raw = df_p
             
     except Exception as e: error_msg += f"投球計算異常: {e}"
@@ -142,7 +185,8 @@ def get_career_stats():
 st.set_page_config(page_title="LAA vs LAD 數據中心", page_icon="⚾", layout="wide")
 st.title("⚾ 洛杉磯雙雄數據追蹤系統 V26")
 
-tab1, tab2, tab3, tab4 = st.tabs(["⚾ 打擊單場輸入", "🥎 投球單場輸入", "🏆 累積數據總表", "📋 賽前戰情室"])
+# ✨ 加入第五個分頁
+tab1, tab2, tab3, tab4, tab5 = st.tabs(["⚾ 打擊單場輸入", "🥎 投球單場輸入", "🏆 累積數據總表", "📋 賽前戰情室", "🎖️ 聯盟大獎預測"])
 
 # --- 分頁 1：打擊輸入 ---
 with tab1:
@@ -217,20 +261,17 @@ with tab2:
 
     records_p = get_raw_records("投手單場紀錄")
     
-    # 找出現有紀錄中，已經被用掉的投手、以及被標記的「勝敗紀錄」
     inputted_pitchers = []
     used_statuses = []
     for row in records_p:
         if len(row) > 4 and row[1] == full_stage_p:
             if row[2] == team_p: inputted_pitchers.append(row[3])
-            # 一場比賽無論哪隊，總共只會有一個勝投、一個敗投 (為了系統嚴謹，我們跨隊檢查)
             used_statuses.append(row[4])
 
     cached_players_p = get_player_list("投手單場紀錄")
     all_team_pitchers = cached_players_p.get(team_p, [])
     available_pitchers = [p for p in all_team_pitchers if p not in inputted_pitchers]
 
-    # ✨ 動態勝敗選單防呆：已輸入過勝/敗/救援，該場比賽就不再顯示該選項 ✨
     p_res_options = ["無", "中繼"]
     if "勝" not in used_statuses: p_res_options.insert(1, "勝")
     if "敗" not in used_statuses: p_res_options.insert(2, "敗")
@@ -287,9 +328,9 @@ with tab2:
 with tab3:
     st.subheader("🏆 累積進階數據排行榜")
     
-    # ✨ 棒球進階數據小教室 ✨
     with st.expander("💡 棒球進階數據 (Sabermetrics) 小教室 (點我展開)"):
         st.markdown("""
+        * **WAR (勝場貢獻值 / Wins Above Replacement)：** 現代棒球最具代表性的「綜合評價指標」！衡量一名球員「比替補球員多替球隊拿下幾場勝利」。數值越高越神，大聯盟單季超過 5.0 通常就是 MVP 競爭者。本系統特製的 **eWAR (估算勝場貢獻值)** 則是透過打者的 OPS+ 與投手的混合防禦率精算而成。
         * **OPS+ (標準化整體攻擊指數)：** 衡量打者整體破壞力的終極指標。**100 為全聯盟平均**。若 OPS+ 為 150，代表火力比平均高出 50%。
         * **FIP (獨立防禦率)：** 剔除隊友守備與運氣成分，只看投手「三振、保送、被全壘打」等自己能控制的能力。
           * 📉 **FIP < ERA (獨立防禦率比防禦率低)：** 投手其實投得很棒！但可能運氣極差或隊友失誤太多，真實實力被低估（俗稱問天或悲情投手）。
@@ -308,7 +349,15 @@ with tab3:
             st.rerun()
             
     with col_f2:
-        filter_season = st.selectbox("篩選賽季", ["十年總成績"] + SEASONS, key="f_season")
+        season_options = ["十年總成績"] + SEASONS
+        s_idx = season_options.index(st.session_state.default_season) if st.session_state.default_season in season_options else 0
+        
+        def update_season():
+            st.session_state.default_season = st.session_state.f_season
+            save_settings()
+            
+        filter_season = st.selectbox("篩選賽季", season_options, index=s_idx, key="f_season", on_change=update_season)
+
     with col_f3:
         if filter_season == "十年總成績":
             filter_game = st.selectbox("篩選比賽階段", ["不限 (看全部)"], disabled=True, key="f_game")
@@ -361,8 +410,9 @@ with tab3:
             def calc_ops_plus(row):
                 if lg_obp > 0 and lg_slg > 0 and row['打席'] > 0: return 100 * ((row['OBP'] / lg_obp) + (row['SLG'] / lg_slg) - 1)
                 return 0.0
-            # ✨ OPS+ 轉為整數 ✨
             agg_b['OPS+'] = agg_b.apply(calc_ops_plus, axis=1).round(0).astype(int)
+            
+            agg_b['eWAR'] = agg_b.apply(lambda r: ((r['OPS+'] - 80) / 100) * (r['打席'] / 20), axis=1)
 
             qual_b = agg_b[agg_b['打席'] >= QUALIFY_PA]
             avg_pool = qual_b if not qual_b.empty else agg_b
@@ -406,17 +456,20 @@ with tab3:
             df_sum_b = pd.DataFrame(summary_b)
             st.dataframe(df_sum_b.style.format({'OPS': '{:.3f}', 'AVG': '{:.3f}', 'OBP': '{:.3f}', 'SLG': '{:.3f}'}), use_container_width=True, hide_index=True)
 
-            show_cols_b = ['球隊', '球員姓名', '出賽數', '打席', '打數', 'OPS+', 'OPS', 'AVG', 'OBP', 'SLG', 'ISO', 'BABIP', 'BB%', 'K%', '全壘打', '打點', '盜壘']
+            # ✨ 將 eWAR 加入顯示欄位
+            show_cols_b = ['球隊', '球員姓名', '出賽數', '打席', '打數', 'OPS+', 'OPS', 'AVG', 'OBP', 'SLG', 'ISO', 'BABIP', 'BB%', 'K%', '全壘打', '打點', '盜壘', 'eWAR']
             show_df = agg_b[show_cols_b].copy()
+            # ✨ 保留您 V26 原本的 OPS+ 排序
             show_df = show_df.sort_values(by=['球隊', 'OPS+'], ascending=[True, False])
 
             for team in TEAMS:
                 st.markdown(f"#### {team} 個人打擊榜")
                 team_df = show_df[show_df['球隊'] == team]
                 if not team_df.empty: 
+                    # ✨ 加入 eWAR 格式化
                     styled_df = team_df.drop(columns=['球隊']).style.format({
                         'OPS': '{:.3f}', 'AVG': '{:.3f}', 'OBP': '{:.3f}', 'SLG': '{:.3f}', 'ISO': '{:.3f}', 'BABIP': '{:.3f}',
-                        'BB%': '{:.1f}%', 'K%': '{:.1f}%'
+                        'BB%': '{:.1f}%', 'K%': '{:.1f}%', 'eWAR': '{:.1f}'
                     })
                     st.dataframe(styled_df, use_container_width=True, hide_index=True)
     else: st.info("目前沒有打擊紀錄可以顯示！")
@@ -454,6 +507,10 @@ with tab3:
             agg_p['K/BB'] = (agg_p['奪三振'] / agg_p['四壞球'].replace(0, 1)).fillna(agg_p['奪三振'])
             agg_p['FIP'] = (((13 * agg_p['被全壘打']) + (3 * agg_p['四壞球']) - (2 * agg_p['奪三振'])) / ip_calc.replace(0, 1) + 3.10).fillna(0)
             
+            # ✨ 加入 TRA 與 eWAR 計算
+            agg_p['TRA'] = (agg_p['ERA'] + agg_p['FIP']) / 2.0
+            agg_p['eWAR'] = agg_p.apply(lambda r: ((5.00 - r['TRA']) / 1.5) * (r['實際局數'] / 10), axis=1)
+
             qual_p = agg_p[agg_p['實際局數'] >= QUALIFY_IP]
             era_pool = qual_p if not qual_p.empty else agg_p
             
@@ -505,30 +562,150 @@ with tab3:
             df_sum_p = pd.DataFrame(summary_p)
             st.dataframe(df_sum_p.style.format({'ERA': '{:.2f}', 'FIP': '{:.2f}', 'WHIP': '{:.2f}', 'K/9': '{:.2f}', 'BB/9': '{:.2f}'}), use_container_width=True, hide_index=True)
             
-            show_cols_p = ['球隊', '投手姓名', '勝投', '中繼成功', '救援成功', 'ERA', 'FIP', 'WHIP', 'K/9', 'BB/9', 'HR/9', 'K/BB', '總局數', '奪三振']
+            # ✨ 將 eWAR 加入顯示欄位
+            show_cols_p = ['球隊', '投手姓名', '勝投', '中繼成功', '救援成功', 'ERA', 'FIP', 'WHIP', 'K/9', 'BB/9', 'HR/9', 'K/BB', '總局數', '奪三振', 'eWAR']
             show_p = agg_p[show_cols_p].copy()
+            # ✨ 保留您 V26 原本的 FIP 排序
             show_p = show_p.sort_values(by=['球隊', 'FIP'], ascending=[True, True])
 
             for team in TEAMS:
                 st.markdown(f"#### {team} 個人投手榜")
                 team_df = show_p[show_p['球隊'] == team]
                 if not team_df.empty: 
+                    # ✨ 加入 eWAR 格式化
                     styled_p = team_df.drop(columns=['球隊']).style.format({
                         'ERA': '{:.2f}', 'FIP': '{:.2f}', 'WHIP': '{:.2f}',
                         'K/9': '{:.2f}', 'BB/9': '{:.2f}', 'HR/9': '{:.2f}', 'K/BB': '{:.2f}',
-                        '總局數': '{:.1f}'
+                        '總局數': '{:.1f}', 'eWAR': '{:.1f}'
                     })
                     st.dataframe(styled_p, use_container_width=True, hide_index=True)
     else: st.info("目前沒有投球紀錄可以顯示！")
-
 # ==========================================
-# --- 分頁 4：📋 賽前戰情室 (智慧標籤與過濾引擎版) ---
+# --- 分頁 4：📋 賽前戰情室 (AI 代排 + 球評點評版) ---
 # ==========================================
 with tab4:
-    st.header("📋 賽前戰情室")
+    st.header("📋 賽前戰情室與 AI 深度戰報")
     
+    if st.session_state.get('df_b_raw', pd.DataFrame()).empty:
+        get_career_stats()
+
+    season_options_wr = ["十年總成績"] + SEASONS
+    saved_wr_season = st.session_state.get("wr_season", "十年總成績")
+    wr_s_idx = season_options_wr.index(saved_wr_season) if saved_wr_season in season_options_wr else 0
+    
+    def update_wr_season():
+        st.session_state.wr_season = st.session_state.wr_season_sel
+        if 'save_settings' in globals(): save_settings()
+        
+    wr_season = st.selectbox("📊 選擇分析賽季 (排打線與戰報將以本季近況為主)", season_options_wr, index=wr_s_idx, key="wr_season_sel", on_change=update_wr_season)
+
+    def get_season_data(target_season):
+        df_b_raw = st.session_state.get('df_b_raw', pd.DataFrame())
+        df_p_raw = st.session_state.get('df_p_raw', pd.DataFrame())
+        if df_b_raw.empty and df_p_raw.empty: return {}, {}
+        
+        prefix = ""
+        if target_season != "十年總成績":
+            s_num = target_season.split(" ")[1]
+            prefix = f"[S{s_num}]"
+
+        b_sub = df_b_raw[df_b_raw['賽事階段'].astype(str).str.contains(prefix, regex=False)] if prefix else df_b_raw
+        p_sub = df_p_raw[df_p_raw['賽事階段'].astype(str).str.contains(prefix, regex=False)] if prefix else df_p_raw
+
+        b_dict, p_dict = {}, {}
+        if not b_sub.empty:
+            total_pa = b_sub['打席'].sum()
+            lg_obp = (b_sub['安打'].sum() + b_sub['四壞球'].sum()) / total_pa if total_pa > 0 else 0
+            lg_slg = ((b_sub['安打'].sum() - b_sub['二壘安打'].sum() - b_sub['三壘安打'].sum() - b_sub['全壘打'].sum()) + 2*b_sub['二壘安打'].sum() + 3*b_sub['三壘安打'].sum() + 4*b_sub['全壘打'].sum()) / b_sub['打數'].sum() if b_sub['打數'].sum() > 0 else 0
+
+            agg_b = b_sub.groupby(['球隊', '球員姓名']).sum().reset_index()
+            for _, row in agg_b.iterrows():
+                avg = row['安打'] / max(1, row['打數'])
+                obp = (row['安打'] + row['四壞球']) / max(1, row['打席'])
+                slg = ((row['安打'] - row['二壘安打'] - row['三壘安打'] - row['全壘打']) + 2*row['二壘安打'] + 3*row['三壘安打'] + 4*row['全壘打']) / max(1, row['打數'])
+                ops_p = 100 * ((obp / lg_obp) + (slg / lg_slg) - 1) if lg_obp > 0 and lg_slg > 0 else 0
+                ewar = ((ops_p - 80) / 100) * (row['打席'] / 20)
+                
+                iso = slg - avg
+                k_pct = (row['三振'] / max(1, row['打席'])) * 100
+                bb_pct = (row['四壞球'] / max(1, row['打席'])) * 100
+                babip = (row['安打'] - row['全壘打']) / max(1, (row['打數'] - row['三振'] - row['全壘打']))
+                
+                b_dict[row['球員姓名']] = {
+                    'OPS+': ops_p, 'eWAR': ewar, 'AVG': avg, 'OBP': obp, 'HR': row['全壘打'],
+                    'ISO': iso, 'K%': k_pct, 'BB%': bb_pct, 'BABIP': babip, 'SB': row['盜壘']
+                }
+
+        if not p_sub.empty:
+            agg_p = p_sub.groupby(['球隊', '投手姓名']).sum().reset_index()
+            for _, row in agg_p.iterrows():
+                ip_calc = (row['局數(整數)'] * 3 + row['局數(出局數)']) / 3.0
+                era = (row['自責分'] * 9) / max(1, ip_calc)
+                fip = (((13 * row['被全壘打']) + (3 * row['四壞球']) - (2 * row['奪三振'])) / max(1, ip_calc)) + 3.10
+                tra = (era + fip) / 2.0
+                ewar = ((5.00 - tra) / 1.5) * (ip_calc / 10)
+                
+                whip = (row['被安打'] + row['四壞球']) / max(1, ip_calc)
+                k9 = (row['奪三振'] * 9) / max(1, ip_calc)
+                
+                p_dict[row['投手姓名']] = {
+                    'ERA': era, 'eWAR': ewar, 'K': row['奪三振'], 'FIP': fip,
+                    'WHIP': whip, 'K/9': k9
+                }
+
+        return b_dict, p_dict
+
+    curr_b_stats, curr_p_stats = get_season_data(wr_season)
+    
+    prev_season_str = "十年總成績"
+    if wr_season != "十年總成績":
+        curr_s_num = int(wr_season.split(" ")[1])
+        if curr_s_num > 1: prev_season_str = f"Season {curr_s_num - 1}"
+    prev_b_stats, prev_p_stats = get_season_data(prev_season_str)
+
     cached_players_b = get_player_list("打擊單場紀錄")
     cached_players_p = get_player_list("投手單場紀錄")
+    
+    st.markdown("---")
+    col_ai1, col_ai2 = st.columns(2)
+    
+    def auto_lineup(team_name):
+        available_players = cached_players_b.get(team_name, [])
+        valid_players = [p for p in available_players if p in curr_b_stats]
+        
+        if len(valid_players) < 9:
+            st.toast(f"⚠️ {team_name} 擁有數據的球員不足 9 人，無法啟動代排。")
+            return
+            
+        top_9 = sorted(valid_players, key=lambda x: curr_b_stats[x]['OPS+'], reverse=True)[:9]
+        
+        leadoff = max(top_9, key=lambda x: curr_b_stats[x]['OBP'])  
+        top_9.remove(leadoff)
+        cleanup = max(top_9, key=lambda x: curr_b_stats[x]['ISO'])  
+        top_9.remove(cleanup)
+        second = max(top_9, key=lambda x: curr_b_stats[x]['OPS+'])  
+        top_9.remove(second)
+        third = max(top_9, key=lambda x: curr_b_stats[x]['AVG'])    
+        top_9.remove(third)
+        fifth = max(top_9, key=lambda x: curr_b_stats[x]['OPS+'])   
+        top_9.remove(fifth)
+        
+        rest = sorted(top_9, key=lambda x: curr_b_stats[x]['OPS+'], reverse=True)
+        
+        optimal_order = [leadoff, second, third, cleanup, fifth] + rest
+        st.session_state.lineups[team_name] = optimal_order
+        
+        for i, p_name in enumerate(optimal_order):
+            st.session_state[f"{team_name.lower()}_b{i+1}"] = p_name
+            
+        if 'save_settings' in globals(): save_settings()
+        st.rerun()
+
+    with col_ai1:
+        if st.button("🤖 AI 一鍵代排 LAA 最佳火力打線", use_container_width=True): auto_lineup("LAA")
+    with col_ai2:
+        if st.button("🤖 AI 一鍵代排 LAD 最佳火力打線", use_container_width=True): auto_lineup("LAD")
+    st.markdown("---")
     
     col_laa, col_lad = st.columns(2)
     
@@ -538,9 +715,26 @@ with tab4:
         available_laa = cached_players_b.get("LAA", []).copy()
         for i in range(1, 10):
             current_options = ["未指定"] + available_laa
-            p = st.selectbox(f"第 {i} 棒", current_options, key=f"laa_b{i}")
-            if p != "未指定": laa_batters.append(p); available_laa.remove(p)
-        laa_sp = st.selectbox("先發投手 (SP)", ["未指定"] + cached_players_p.get("LAA", []), key="laa_sp")
+            saved_b = st.session_state.lineups["LAA"][i-1]
+            b_idx = current_options.index(saved_b) if saved_b in current_options else 0
+            
+            p = st.selectbox(f"第 {i} 棒", current_options, index=b_idx, key=f"laa_b{i}")
+            st.session_state.lineups["LAA"][i-1] = p if p != "未指定" else ""
+            
+            if p != "未指定":
+                laa_batters.append(p)
+                available_laa.remove(p)
+                stats = curr_b_stats.get(p, {'OPS+': 0, 'eWAR': 0, 'AVG': 0})
+                st.caption(f"📊 eWAR: **{stats['eWAR']:.1f}** | OPS+: **{stats['OPS+']:.0f}** | AVG: {stats['AVG']:.3f}")
+            
+        laa_sp_options = ["未指定"] + cached_players_p.get("LAA", [])
+        saved_sp_laa = st.session_state.pitchers["LAA"]
+        laa_sp_idx = laa_sp_options.index(saved_sp_laa) if saved_sp_laa in laa_sp_options else 0
+        laa_sp = st.selectbox("先發投手 (SP)", laa_sp_options, index=laa_sp_idx, key="laa_sp")
+        st.session_state.pitchers["LAA"] = laa_sp if laa_sp != "未指定" else ""
+        if laa_sp != "未指定":
+            stats = curr_p_stats.get(laa_sp, {'ERA': 0, 'eWAR': 0, 'K': 0})
+            st.caption(f"🥎 eWAR: **{stats['eWAR']:.1f}** | ERA: **{stats['ERA']:.2f}** | K: {stats['K']}")
         
     with col_lad:
         st.subheader("🔵 LAD 先發陣容")
@@ -548,185 +742,422 @@ with tab4:
         available_lad = cached_players_b.get("LAD", []).copy()
         for i in range(1, 10):
             current_options = ["未指定"] + available_lad
-            p = st.selectbox(f"第 {i} 棒", current_options, key=f"lad_b{i}")
-            if p != "未指定": lad_batters.append(p); available_lad.remove(p)
-        lad_sp = st.selectbox("先發投手 (SP)", ["未指定"] + cached_players_p.get("LAD", []), key="lad_sp")
+            saved_b = st.session_state.lineups["LAD"][i-1]
+            b_idx = current_options.index(saved_b) if saved_b in current_options else 0
+            
+            p = st.selectbox(f"第 {i} 棒", current_options, index=b_idx, key=f"lad_b{i}")
+            st.session_state.lineups["LAD"][i-1] = p if p != "未指定" else ""
+            
+            if p != "未指定":
+                lad_batters.append(p)
+                available_lad.remove(p)
+                stats = curr_b_stats.get(p, {'OPS+': 0, 'eWAR': 0, 'AVG': 0})
+                st.caption(f"📊 eWAR: **{stats['eWAR']:.1f}** | OPS+: **{stats['OPS+']:.0f}** | AVG: {stats['AVG']:.3f}")
+            
+        lad_sp_options = ["未指定"] + cached_players_p.get("LAD", [])
+        saved_sp_lad = st.session_state.pitchers["LAD"]
+        lad_sp_idx = lad_sp_options.index(saved_sp_lad) if saved_sp_lad in lad_sp_options else 0
+        lad_sp = st.selectbox("先發投手 (SP)", lad_sp_options, index=lad_sp_idx, key="lad_sp")
+        st.session_state.pitchers["LAD"] = lad_sp if lad_sp != "未指定" else ""
+        if lad_sp != "未指定":
+            stats = curr_p_stats.get(lad_sp, {'ERA': 0, 'eWAR': 0, 'K': 0})
+            st.caption(f"🥎 eWAR: **{stats['eWAR']:.1f}** | ERA: **{stats['ERA']:.2f}** | K: {stats['K']}")
 
     st.markdown("---")
     
-    if st.button("📊 產生今日觀戰重點", type="primary", use_container_width=True):
-        with st.spinner("AI 正在分析大量數據與潛規則..."):
-            df_b, df_p, err = get_career_stats()
+    if st.button("🎙️ 產生賽前深度戰報 (進階數據與近況分析)", type="primary", use_container_width=True):
+        if 'save_settings' in globals(): save_settings()
+        
+        with st.spinner("AI 球評正在運算高階 Sabermetrics 數據與球隊近況..."):
+            time.sleep(1.5)
             
-            if df_b is None or df_b.empty:
-                st.warning("⚠️ 數據不足！請確認試算表內至少有一筆有效的球員紀錄。")
-            else:
-                raw_report_pool = []
+            df_p_full = st.session_state.get('df_p_raw', pd.DataFrame())
+            
+            def get_team_streak(team_name):
+                if df_p_full.empty: return "尚無賽事"
+                t_df = df_p_full[df_p_full['球隊'] == team_name].sort_values(by='時間戳記', ascending=True)
+                results = []
+                for _, g in t_df.groupby(['時間戳記', '賽事階段'], sort=False):
+                    if '勝' in g['勝敗'].values: results.append('W')
+                    elif '敗' in g['勝敗'].values: results.append('L')
                 
-                # --- 團隊分析 ---
-                def analyze_team_status(team_name, sp_name):
-                    if not df_p.empty:
-                        bp_df = df_p[(df_p['球隊'] == team_name) & (df_p['投手姓名'] != sp_name)]
-                        if not bp_df.empty:
-                            bp_outs = (bp_df['局數(整數)'].sum() * 3) + bp_df['局數(出局數)'].sum()
-                            bp_ip = bp_outs / 3.0
-                            if bp_ip > 0:
-                                bp_era = (bp_df['自責分'].sum() * 9) / bp_ip
-                                if bp_era > 5.50:
-                                    msgs = [
-                                        f"🚨 **【牛棚核爆危機】** {team_name} 後援防線宛如提款機 (牛棚 ERA {bp_era:.2f})，對方只要撐過先發投手大有可為！",
-                                        f"🔥 **【漏水牛棚】** {team_name} 牛棚 ERA 高達 {bp_era:.2f}，比賽隨時可能在後半段翻盤。"
-                                    ]
-                                    raw_report_pool.append({"type": "error", "text": random.choice(msgs), "player": "Team_BP", "category": "TEAM_BP_BAD"})
-                                elif bp_era < 2.50:
-                                    msgs = [
-                                        f"🏰 **【鐵壁牛棚】** {team_name} 擁有固若金湯的後援防線 (牛棚 ERA {bp_era:.2f})，陷入僵局對他們極度有利。",
-                                        f"🔒 **【關門大吉】** 只要 {team_name} 取得領先，他們強悍的牛棚 (ERA {bp_era:.2f}) 幾乎不會讓勝利溜走。"
-                                    ]
-                                    raw_report_pool.append({"type": "success", "text": random.choice(msgs), "player": "Team_BP", "category": "TEAM_BP_GOOD"})
-                    
-                    if not df_b.empty:
-                        team_b_df = df_b[df_b['球隊'] == team_name]
-                        if not team_b_df.empty:
-                            team_ab = team_b_df['打數'].sum()
-                            team_pa = team_b_df['打席'].sum()
-                            if team_ab > 0:
-                                team_avg = team_b_df['安打'].sum() / team_ab
-                                if team_avg < 0.200:
-                                    msgs = [
-                                        f"🥶 **【全隊急凍】** {team_name} 團隊打線陷入低潮 (打擊率僅 {team_avg:.3f})，極需有人跳出來帶動氣勢。",
-                                        f"💤 **【集體沉睡】** {team_name} 的打線像是被下了安眠藥 (團隊 AVG {team_avg:.3f})，今晚能甦醒嗎？"
-                                    ]
-                                    raw_report_pool.append({"type": "warning", "text": random.choice(msgs), "player": "Team_Hit", "category": "TEAM_SLUMP"})
-                                
-                                team_tb = (team_b_df['安打'].sum() - team_b_df['二壘安打'].sum() - team_b_df['三壘安打'].sum() - team_b_df['全壘打'].sum()) + 2*team_b_df['二壘安打'].sum() + 3*team_b_df['三壘安打'].sum() + 4*team_b_df['全壘打'].sum()
-                                team_iso = (team_tb / team_ab) - team_avg
-                                if team_iso > 0.200:
-                                    raw_report_pool.append({"type": "error", "text": f"🌋 **【團隊長打猛獸】** {team_name} 全隊充斥著怪力男 (團隊 ISO {team_iso:.3f})，稍有不慎就會被扛出大牆。", "player": "Team_Hit", "category": "TEAM_POWER"})
-                            
-                            if team_pa > 0:
-                                team_bb_pct = (team_b_df['四壞球'].sum() / team_pa) * 100
-                                if team_bb_pct > 12:
-                                    raw_report_pool.append({"type": "warning", "text": f"🧘‍♂️ **【極致耐心】** {team_name} 是支選球極其刁鑽的球隊 (團隊保送率 {team_bb_pct:.1f}%)，會快速消耗對方投手的用球數。", "player": "Team_Hit", "category": "TEAM_EYE"})
+                if not results: return "尚無勝負"
+                streak_type = results[-1]
+                streak_count = 0
+                for r in reversed(results):
+                    if r == streak_type: streak_count += 1
+                    else: break
+                return f"**{streak_count} 連勝** 🔥" if streak_type == 'W' else f"**{streak_count} 連敗** 🧊"
 
-                analyze_team_status("LAA", laa_sp)
-                analyze_team_status("LAD", lad_sp)
-
-                # --- 獨立分析 ---
-                def analyze_player_matchup(team_name, batters, sp_same_team, opp_team, opp_sp):
-                    if opp_sp != "未指定":
-                        sp_stats = df_p[(df_p['球隊'] == opp_team) & (df_p['投手姓名'] == opp_sp)]
-                        if not sp_stats.empty:
-                            fip, era, k9, hr9 = sp_stats.iloc[0]['FIP'], sp_stats.iloc[0]['ERA'], sp_stats.iloc[0]['K/9'], sp_stats.iloc[0]['HR/9']
-                            if 0 < fip < 2.50:
-                                msgs = [
-                                    f"🛡️ **【賽揚神獸】** {opp_team} {opp_sp} 展現史詩級壓制力 (FIP {fip:.2f})，{team_name} 今晚將面臨苦戰。",
-                                    f"⛰️ **【難以翻越的高牆】** {opp_team} 推出的 {opp_sp} (FIP {fip:.2f}) 近乎無解，必須把握得點圈機會。"
-                                ]
-                                raw_report_pool.append({"type": "error", "text": random.choice(msgs), "player": opp_sp, "category": "SP_ACE"})
-                            if era > 6.0:
-                                msgs = [
-                                    f"🎯 **【發球機啟動】** {opp_team} {opp_sp} 近期狂失分 (ERA {era:.2f})，{team_name} 打線請把握進補機會！",
-                                    f"🎁 **【大進補時間】** {opp_team} {opp_sp} 狀況極差，這會是 {team_name} 洗數據的最佳時機。"
-                                ]
-                                raw_report_pool.append({"type": "success", "text": random.choice(msgs), "player": opp_sp, "category": "SP_BP"})
-                            if k9 > 11.0:
-                                msgs = [
-                                    f"🌪️ **【三振大師】** {opp_team} {opp_sp} 狂飆三振 (K/9 {k9:.2f})，打者請縮小好球帶，想辦法破壞球數。",
-                                    f"⚔️ **【揮空夢魘】** {opp_team} {opp_sp} 的球威極其噁心，今晚預計會有大量打者走回休息室。"
-                                ]
-                                raw_report_pool.append({"type": "warning", "text": random.choice(msgs), "player": opp_sp, "category": "SP_K"})
-
-                    for i, batter in enumerate(batters):
-                        b_stats = df_b[(df_b['球隊'] == team_name) & (df_b['球員姓名'] == batter)]
-                        if not b_stats.empty:
-                            ops_p, hr, sb, k_pct = b_stats.iloc[0]['OPS+'], b_stats.iloc[0]['全壘打'], b_stats.iloc[0]['盜壘'], b_stats.iloc[0]['K%']
-                            bb_pct = b_stats.iloc[0]['BB%']
-                            
-                            if "ohtani" in batter.lower() or "大谷" in batter:
-                                if batter == sp_same_team: 
-                                    msgs = [
-                                        f"⚔️ **【二刀流全開】** 警告！{team_name} {batter} 同場先發投打，對手準備見證歷史！",
-                                        f"🦄 **【棒球界獨角獸】** 又是投球又是打擊，{team_name} {batter} 打算一個人擊敗對手全隊嗎？"
-                                    ]
-                                    raw_report_pool.append({"type": "error", "text": random.choice(msgs), "player": batter, "category": "TWO_WAY"})
-                            
-                            if ops_p > 180:
-                                msgs = [
-                                    f"👽 **【外星人降臨】** {team_name} {batter} 數據超脫人類極限 (OPS+ {ops_p:.0f})。直接敬遠可能比較快。",
-                                    f"🛑 **【危險人物】** 看到 {team_name} {batter} 走上打擊區，防護員已經準備好冰敷袋了 (OPS+ {ops_p:.0f})。"
-                                ]
-                                raw_report_pool.append({"type": "error", "text": random.choice(msgs), "player": batter, "category": "OPS_HIGH"})
-                            elif ops_p > 140:
-                                msgs = [
-                                    f"🔥 **【重砲警戒】** {team_name} {batter} 近況火熱 (OPS+ {ops_p:.0f})，投手絕對不能失投。",
-                                    f"💥 **【火力全開】** {team_name} {batter} 手感燙得可以煎蛋，請投手小心對付。"
-                                ]
-                                raw_report_pool.append({"type": "warning", "text": random.choice(msgs), "player": batter, "category": "OPS_GOOD"})
-                            
-                            if hr > 2 and k_pct > 30:
-                                msgs = [
-                                    f"💨 **【電風扇盲砲】** {team_name} {batter} 要麼全壘打要麼揮空，變化球伺候。",
-                                    f"🎲 **【吃角子老虎機】** 投資 {team_name} {batter} 風險極大，要嘛全壘打不然就三振。"
-                                ]
-                                raw_report_pool.append({"type": "info", "text": random.choice(msgs), "player": batter, "category": "FAN"})
-                            if sb >= 5:
-                                msgs = [
-                                    f"🏍️ **【紅色閃電】** {team_name} {batter} 已累積 {sb} 盜壘，只要上一壘就等於在二壘。",
-                                    f"🏃 **【田徑隊借來的】** 只要讓 {team_name} {batter} 上壘，捕手跟投手的噩夢就開始了。"
-                                ]
-                                raw_report_pool.append({"type": "warning", "text": random.choice(msgs), "player": batter, "category": "SPEED"})
-                            if bb_pct > 18:
-                                msgs = [
-                                    f"🦅 **【鷹眼】** {team_name} {batter} 超會選球 (BB% {bb_pct:.1f}%)，請準備好投滿球數。",
-                                    f"🧘‍♂️ **【打擊區的修行者】** 面對 {team_name} {batter}，想騙他揮壞球簡直比登天還難。"
-                                ]
-                                raw_report_pool.append({"type": "warning", "text": random.choice(msgs), "player": batter, "category": "EYE"})
-
-                analyze_player_matchup("LAA", laa_batters, laa_sp, "LAD", lad_sp)
-                analyze_player_matchup("LAD", lad_batters, lad_sp, "LAA", laa_sp)
-
-                st.markdown("---")
-                st.markdown("## 📰 今日賽前觀戰焦點 (Top 5)")
+            def get_bullpen_era(team_name, sp_name):
+                if df_p_full.empty: return None
+                prefix = "" if wr_season == "十年總成績" else f"[S{wr_season.split(' ')[1]}]"
+                sub_df = df_p_full[df_p_full['賽事階段'].astype(str).str.contains(prefix, regex=False)] if prefix else df_p_full
                 
-                if raw_report_pool:
-                    team_reports = [r for r in raw_report_pool if "Team" in r['player']]
-                    player_reports = [r for r in raw_report_pool if "Team" not in r['player']]
-                    
-                    random.shuffle(team_reports)
-                    random.shuffle(player_reports)
-                    
-                    final_reports = []
-                    selected_players = set()
-                    selected_categories = set()
-                    
-                    for r in team_reports:
-                        if len(final_reports) >= 2: break
-                        if r['category'] not in selected_categories:
-                            final_reports.append(r)
-                            selected_categories.add(r['category'])
-                            
-                    for r in player_reports:
-                        if len(final_reports) >= 5: break
-                        if r['player'] not in selected_players and r['category'] not in selected_categories:
-                            final_reports.append(r)
-                            selected_players.add(r['player'])
-                            selected_categories.add(r['category'])
-                    
-                    if len(final_reports) < 3:
-                        for r in raw_report_pool:
-                            if len(final_reports) >= 3: break
-                            if r not in final_reports: final_reports.append(r)
-                            
-                    st.info(random.choice([
-                        "🏟️ **【洛城內戰】** 高速公路大戰 (Freeway Series) 點燃戰火！面子之爭絕不退讓！",
-                        "🔥 **【恩怨對決】** 洛杉磯的球迷已經將球場塞滿，今晚註定是個不安靜的夜晚！",
-                        "🍿 **【頂尖碰撞】** 準備好爆米花，兩支火力強大的球隊即將在鑽石場上正面交鋒！"
-                    ]))
-                    for report in final_reports:
-                        if report['type'] == 'error': st.error(report['text'])
-                        elif report['type'] == 'warning': st.warning(report['text'])
-                        elif report['type'] == 'success': st.success(report['text'])
-                        else: st.info(report['text'])
+                bp_df = sub_df[(sub_df['球隊'] == team_name) & (sub_df['投手姓名'] != sp_name)]
+                bp_df = bp_df[(bp_df['勝敗'].isin(['中繼', '救援'])) | (bp_df['局數(整數)'] == 0)]
+                
+                if bp_df.empty: return None
+                bp_outs = (bp_df['局數(整數)'].sum() * 3) + bp_df['局數(出局數)'].sum()
+                bp_ip = bp_outs / 3.0
+                if bp_ip > 0: return (bp_df['自責分'].sum() * 9) / bp_ip
+                return 0.0
+
+            st.markdown(f"## 📰 【{wr_season}】 賽前魔球戰報 (Sabermetrics Preview)")
+            
+            st.markdown("### 🏟️ 球隊近況與牛棚防線 (Momentum & Bullpen)")
+            def generate_team_momentum(team, sp):
+                streak = get_team_streak(team)
+                bp_era = get_bullpen_era(team, sp)
+                
+                text = f"**【{team} 戰力概況】**\n"
+                text += f"- **近期氣勢**：目前球隊正處於 {streak} 的狀態。\n"
+                
+                if bp_era is not None:
+                    text += f"- **牛棚安定度**：本季真實後援防線 ERA 為 **{bp_era:.2f}**。"
+                    if bp_era > 5.50: text += " 🚨 **(放火警報)** 後段局數宛如提款機，只要先發投手一下場，比賽隨時可能翻盤！\n\n"
+                    elif bp_era < 2.50: text += " 🔒 **(鐵壁防線)** 只要取得領先，對手幾乎無法從他們牛棚手中越雷池一步。\n\n"
+                    else: text += " 發揮中規中矩，將考驗總教練的調度時機。\n\n"
+                else: text += "- **牛棚安定度**：本季尚無牛棚出賽紀錄。\n\n"
+                return text
+
+            st.info(generate_team_momentum("LAA", laa_sp) + generate_team_momentum("LAD", lad_sp))
+
+            st.markdown("### 🥎 投手丘上的進階剖析 (Pitching Matrix)")
+            def get_pitcher_insights(team, sp, stats_dict, prev_dict):
+                if sp not in stats_dict: return ""
+                s = stats_dict[sp]
+                p_era = prev_dict.get(sp, {}).get('ERA', s['ERA'])
+                trend = f"(去年 ERA {p_era:.2f})" if p_era != s['ERA'] else ""
+                
+                insight = f"**【{team} 先發】 {sp}**\n"
+                insight += f"- **基礎數據**：防禦率 **{s['ERA']:.2f}** {trend} | 貢獻值 eWAR **{s['eWAR']:.1f}**\n"
+                insight += f"- **壓制力與控球**：每局被上壘率 (WHIP) 為 **{s['WHIP']:.2f}**，三振率 (K/9) 達到 **{s['K/9']:.2f}**。\n"
+                
+                fip_diff = s['FIP'] - s['ERA']
+                if fip_diff < -0.5:
+                    msgs = [
+                        f"- 💡 **魔球觀點 (被守備雷到)**：他的獨立防禦率 (FIP) 僅 **{s['FIP']:.2f}**，遠低於帳面 ERA！這說明他其實投得極好，失分多半是受隊友拖累。\n\n",
+                        f"- 📉 **進階數據平反 (運氣欠佳)**：別被他 {s['ERA']:.2f} 的防禦率騙了，他的 FIP 只有 **{s['FIP']:.2f}**，代表他的投球內容相當優異，今晚隨時可能觸底反彈。\n\n",
+                        f"- 🛡️ **硬實力護體 (悲情王牌)**：FIP (**{s['FIP']:.2f}**) 顯示他擁有極佳的三振與控球能力，帳面失分多半非戰之罪，隨時可能投出無解的代表作。\n\n"
+                    ]
+                    insight += random.choice(msgs)
+                elif fip_diff > 0.5:
+                    msgs = [
+                        f"- 🚨 **魔球警報 (強運校正)**：他的獨立防禦率 (FIP) 高達 **{s['FIP']:.2f}**，比帳面 ERA 高出不少。代表他能不失分很大程度是靠運氣，今晚面對強打線隨時有核爆的風險。\n\n",
+                        f"- 💣 **拆彈危機 (隨時爆炸)**：雖然 ERA 看似不錯，但 FIP 卻是危險的 **{s['FIP']:.2f}**。這意味著他過度依賴背後的守備，一旦運氣用盡，計分板可能就會失控。\n\n",
+                        f"- ⚠️ **虛假繁榮 (校正回歸)**：進階數據 FIP (**{s['FIP']:.2f}**) 殘酷地指出他的壓制力並沒有帳面上好。打線只要耐心選球，很有機會把他打回原形。\n\n"
+                    ]
+                    insight += random.choice(msgs)
                 else:
-                    st.write("目前雙方戰力均衡，敬請期待場上表現！")
+                    msgs = [
+                        f"- ⚖️ **魔球觀點 (真金不怕火煉)**：他的 FIP (**{s['FIP']:.2f}**) 與 ERA 極為吻合，表現十分穩定，沒有運氣成分。\n\n",
+                        f"- 🎯 **童叟無欺 (所見即所得)**：防禦率與 FIP (**{s['FIP']:.2f}**) 高度一致，代表他完全掌握了自己的投球節奏，表現非常真實。\n\n"
+                    ]
+                    insight += random.choice(msgs)
+                return insight
+
+            p_report = ""
+            if laa_sp != "未指定": p_report += get_pitcher_insights("LAA", laa_sp, curr_p_stats, prev_p_stats)
+            if lad_sp != "未指定": p_report += get_pitcher_insights("LAD", lad_sp, curr_p_stats, prev_p_stats)
+            if p_report: st.success(p_report)
+
+            st.markdown("### 💥 打線雷達掃描與教練點評 (Lineup Critique)")
+            def get_lineup_insights(team, batters, stats_dict):
+                valid_b = [b for b in batters if b in stats_dict]
+                if not valid_b: return ""
+                
+                insights = [f"**【{team} 打線特徵掃描】**"]
+                best_b = max(valid_b, key=lambda x: stats_dict[x]['OPS+'])
+                best_ops = stats_dict[best_b]['OPS+']
+                
+                insights.append(random.choice([
+                    f"- 🔥 **進攻中樞**：**{best_b}** (OPS+ **{best_ops:.0f}**) 是全隊火力最旺盛的打者，絕對是頭號目標。",
+                    f"- 👑 **打線大魔王**：狀態絕佳的 **{best_b}** (OPS+ **{best_ops:.0f}**) 扛起進攻大旗，投手面對他絕對不能失投。"
+                ]))
+                
+                high_k = [b for b in valid_b if stats_dict[b]['K%'] >= 25.0]
+                if high_k: 
+                    k_str = ', '.join(high_k)
+                    insights.append(random.choice([
+                        f"- 🌪️ **揮空隱憂**：**{k_str}** (K% ≥ 25%) 極容易被引誘球騙到出局。",
+                        f"- 💨 **電風扇警戒**：**{k_str}** 雖然有破壞力但三振率偏高，是對方投手刷 K 數的突破口。"
+                    ]))
+                
+                high_bb = [b for b in valid_b if stats_dict[b]['BB%'] >= 15.0]
+                if high_bb: 
+                    bb_str = ', '.join(high_bb)
+                    insights.append(random.choice([
+                        f"- 🦅 **選球大師**：**{bb_str}** 具備極佳的上壘紀律 (BB% ≥ 15%)，能有效消耗投手球數。",
+                        f"- 🧘 **打擊區的修行者**：想騙 **{bb_str}** 揮壞球難如登天，他們將是對方先發投手的球數噩夢。"
+                    ]))
+                    
+                high_iso = [b for b in valid_b if stats_dict[b]['ISO'] >= 0.250 and b != best_b]
+                if high_iso: 
+                    insights.append(random.choice([
+                        f"- 🌋 **長打威脅**：千萬別輕忽 **{high_iso[0]}**！純長打率 (ISO) 高達 **{stats_dict[high_iso[0]]['ISO']:.3f}**，具備一擊逆轉的能力。",
+                        f"- 💥 **隱藏重砲**：**{high_iso[0]}** 的 ISO (**{stats_dict[high_iso[0]]['ISO']:.3f}**) 顯示他只要咬中球心，球隨時會飛出大牆外。"
+                    ]))
+                
+                has_critique = False
+                for i, b in enumerate(batters):
+                    if b not in stats_dict: continue
+                    ops = stats_dict[b]['OPS+']
+                    order = i + 1
+                    
+                    if order <= 4 and ops < 85 and not has_critique:
+                        msgs = [
+                            f"- 🤨 **總教練的謎之信任**：近況低迷的 **{b}** (OPS+ {ops:.0f}) 被排在第 {order} 棒，無疑是潛在的進攻斷點。",
+                            f"- 📉 **破壞化學效應？**：將 OPS+ 僅 {ops:.0f} 的 **{b}** 放在核心的第 {order} 棒，這到底是教練的錦囊妙計，還是盲目迷信？"
+                        ]
+                        insights.append(random.choice(msgs))
+                        has_critique = True
+                    
+                    elif order >= 7 and ops >= 120 and not has_critique:
+                        msgs = [
+                            f"- 🥷 **恐怖的後段伏兵**：近期火力火燙的 **{b}** (OPS+ {ops:.0f}) 居然埋伏在第 {order} 棒！宛如藏在後段的斷頭台。",
+                            f"- 🎭 **扮豬吃老虎**：把狀態極佳的 **{b}** (OPS+ {ops:.0f}) 放在第 {order} 棒，這讓整條打線毫無冷場，對方投手恐怕會很頭痛。"
+                        ]
+                        insights.append(random.choice(msgs))
+                        has_critique = True
+
+                return "\n".join(insights) + "\n\n"
+
+            b_report = ""
+            if laa_batters: b_report += get_lineup_insights("LAA", laa_batters, curr_b_stats)
+            if lad_batters: b_report += get_lineup_insights("LAD", lad_batters, curr_b_stats)
+            if b_report: st.warning(b_report)
+
+            st.markdown("### 🧠 數據總結推演")
+            tactics = []
+            bp_laa = get_bullpen_era("LAA", laa_sp) or 0
+            bp_lad = get_bullpen_era("LAD", lad_sp) or 0
+            
+            if bp_laa > 5.5 and bp_lad > 5.5:
+                tactics.append("雙方牛棚本季都處於隨時會核爆的狀態，這代表即使比賽到了最後一局落後 3 分，都還有極大的逆轉可能！")
+            if laa_sp != "未指定" and lad_batters:
+                if curr_p_stats.get(laa_sp, {}).get('K/9', 0) > 9 and len([b for b in lad_batters if curr_b_stats.get(b, {}).get('K%', 0) > 25]) >= 2:
+                    tactics.append(f"LAA 先發 {laa_sp} 擁有極高的三振能力，而 LAD 打線中充斥高揮空率打者，這場比賽 LAD 的殘壘數恐怕會相當驚人。")
+            if lad_sp != "未指定" and laa_batters:
+                if curr_p_stats.get(lad_sp, {}).get('BB/9', 0) > 4 and len([b for b in laa_batters if curr_b_stats.get(b, {}).get('BB%', 0) > 15]) >= 2:
+                    tactics.append(f"LAA 打線中有多位「選球大師」，碰上控球不穩的 LAD 先發 {lad_sp}，LAD 的牛棚恐怕需要提早熱身準備。")
+            if not tactics: tactics.append("從進階數據來看，雙方陣容勢均力敵！得點圈打擊率與牛棚防線的穩定度將成為勝負分水嶺。")
+                
+            st.error(f"🎙️ **AI 魔球推演：** {random.choice(tactics)}")
+with tab5:
+    st.header("🎖️ 全美棒球記者協會 (BBWAA) 年度大獎開票所")
+    st.write(f"⚠️ **例行賽大獎門檻**：打者需滿 **{QUALIFY_PA} 打席**，投手需滿 **{QUALIFY_IP} 局**。")
+    st.write(f"⚠️ **世界大賽(FMVP)門檻**：打者滿 **3 打席**，投手滿 **1.0 局** 即可角逐。(👑 限定冠軍隊伍球員)")
+    
+    col_s1, col_s2 = st.columns([1, 3])
+    with col_s1: target_season = st.selectbox("選擇結算賽季", SEASONS, key="award_season")
+    
+    # ✨ 這裡拆分成兩個並排的獨立按鈕
+    col_btn1, col_btn2 = st.columns(2)
+    with col_btn1:
+        btn_reg = st.button(f"🏆 結算 {target_season} 例行賽大獎", type="primary", use_container_width=True)
+    with col_btn2:
+        btn_ws = st.button(f"💍 結算 {target_season} 世界大賽 FMVP", type="primary", use_container_width=True)
+    
+    # 只要有按任何一個按鈕，就啟動資料庫喚醒機制
+    if btn_reg or btn_ws:
+        get_career_stats() # 強制喚醒最新資料
+        df_b_raw = st.session_state.get('df_b_raw', pd.DataFrame())
+        df_p_raw = st.session_state.get('df_p_raw', pd.DataFrame())
+        
+        if df_b_raw.empty and df_p_raw.empty:
+            st.warning("⚠️ 查無數據！請確認該賽季有輸入紀錄。")
+        else:
+            s_num = target_season.split(" ")[1]
+            prefix = f"[S{s_num}]"
+            
+            # --- 數據分流與計算引擎 ---
+            def extract_stats(stage_keyword, min_pa, min_ip):
+                df_b_sub = df_b_raw[(df_b_raw['賽事階段'].astype(str).str.contains(prefix, regex=False)) & (df_b_raw['賽事階段'].astype(str).str.contains(stage_keyword, regex=False))] if not df_b_raw.empty else pd.DataFrame()
+                df_p_sub = df_p_raw[(df_p_raw['賽事階段'].astype(str).str.contains(prefix, regex=False)) & (df_p_raw['賽事階段'].astype(str).str.contains(stage_keyword, regex=False))] if not df_p_raw.empty else pd.DataFrame()
+                
+                cand_b, cand_p = {}, {}
+                
+                if not df_b_sub.empty:
+                    total_pa = df_b_sub['打席'].sum()
+                    lg_obp = (df_b_sub['安打'].sum() + df_b_sub['四壞球'].sum()) / total_pa if total_pa > 0 else 0
+                    lg_slg = ((df_b_sub['安打'].sum() - df_b_sub['二壘安打'].sum() - df_b_sub['三壘安打'].sum() - df_b_sub['全壘打'].sum()) + 2*df_b_sub['二壘安打'].sum() + 3*df_b_sub['三壘安打'].sum() + 4*df_b_sub['全壘打'].sum()) / df_b_sub['打數'].sum() if df_b_sub['打數'].sum() > 0 else 0
+                    
+                    df_b_agg = df_b_sub.groupby(['球隊', '球員姓名']).sum().reset_index()
+                    for _, row in df_b_agg.iterrows():
+                        if row['打席'] < min_pa: continue 
+                        avg = row['安打'] / max(1, row['打數'])
+                        obp = (row['安打'] + row['四壞球']) / max(1, row['打席'])
+                        slg = ((row['安打'] - row['二壘安打'] - row['三壘安打'] - row['全壘打']) + 2*row['二壘安打'] + 3*row['三壘安打'] + 4*row['全壘打']) / max(1, row['打數'])
+                        ops_p = 100 * ((obp / lg_obp) + (slg / lg_slg) - 1) if lg_obp > 0 and lg_slg > 0 else 0
+                        # 拔除 max(0) 的負數版 eWAR
+                        ewar = ((ops_p - 80) / 100) * (row['打席'] / 20)
+                        cand_b[f"[{row['球隊']}] {row['球員姓名']}"] = {'類型': '打者', 'HR': row['全壘打'], 'RBI': row['打點'], 'AVG': avg, 'OPS+': ops_p, 'eWAR': ewar}
+
+                if not df_p_sub.empty:
+                    df_p_agg = df_p_sub.groupby(['球隊', '投手姓名']).sum().reset_index()
+                    counts = df_p_sub.groupby(['球隊', '投手姓名', '勝敗']).size().unstack(fill_value=0).reset_index()
+                    if '勝' not in counts.columns: counts['勝'] = 0
+                    if '救援' not in counts.columns: counts['救援'] = 0
+                    df_p_agg = pd.merge(df_p_agg, counts, on=['球隊', '投手姓名'], how='left')
+                    
+                    for _, row in df_p_agg.iterrows():
+                        ip_calc = (row['局數(整數)'] * 3 + row['局數(出局數)']) / 3.0
+                        if ip_calc < min_ip: continue 
+                        era = (row['自責分'] * 9) / max(1, ip_calc)
+                        fip = (((13 * row['被全壘打']) + (3 * row['四壞球']) - (2 * row['奪三振'])) / max(1, ip_calc)) + 3.10
+                        tra = (era + fip) / 2.0
+                        # 拔除 max(0) 的負數版 eWAR
+                        ewar = ((5.00 - tra) / 1.5) * (ip_calc / 10)
+                        
+                        name = f"[{row['球隊']}] {row['投手姓名']}"
+                        if name in cand_b: 
+                            cand_b[name]['eWAR'] += (ewar * 1.2) 
+                            cand_b[name]['W'] = row['勝']
+                            cand_b[name]['ERA'] = era
+                        else:
+                            cand_p[name] = {'類型': '投手', 'W': row['勝'], 'SV': row['救援'], 'ERA': era, 'FIP': fip, 'K': row['奪三振'], 'eWAR': ewar}
+                
+                all_cand = {**cand_b, **cand_p}
+                leaders = {
+                    'HR': max([s.get('HR', 0) for s in all_cand.values()] + [0]),
+                    'RBI': max([s.get('RBI', 0) for s in all_cand.values()] + [0]),
+                    'W': max([s.get('W', 0) for s in all_cand.values()] + [0]),
+                    'K': max([s.get('K', 0) for s in all_cand.values()] + [0])
+                }
+                return all_cand, leaders
+
+            # --- AI 投票邏輯 ---
+            def simulate_voting(candidates, leaders, target_award, winner_team=None):
+                if not candidates: return pd.DataFrame()
+                results = {name: {'1st': 0, '2nd': 0, '3rd': 0, 'Points': 0} for name in candidates}
+                voter_types = ['Traditional']*12 + ['Sabermetric']*10 + ['Balanced']*8
+                
+                max_hr, max_rbi, max_w, max_k = leaders['HR'], leaders['RBI'], leaders['W'], leaders['K']
+                
+                for voter in voter_types:
+                    scores = {}
+                    for name, stats in candidates.items():
+                        score = 0
+                        leader_bonus = 0
+                        if target_award != "FMVP": 
+                            if stats.get('HR', 0) == max_hr and max_hr > 0: leader_bonus += 50
+                            if stats.get('RBI', 0) == max_rbi and max_rbi > 0: leader_bonus += 30
+                            if stats.get('W', 0) == max_w and max_w > 0: leader_bonus += 50
+                        
+                        if target_award == "MVP":
+                            if voter == 'Traditional':
+                                if stats['類型'] == '打者':
+                                    score += stats.get('HR', 0) * 20 + stats.get('RBI', 0) * 10 + leader_bonus * 1.5 
+                                    if stats.get('AVG', 0) > 0.300: score += 20
+                                    elif stats.get('AVG', 0) < 0.250: score -= 30
+                                else:
+                                    score += stats.get('W', 0) * 25 + leader_bonus * 1.5
+                            elif voter == 'Sabermetric':
+                                score += stats.get('eWAR', 0) * 80 + leader_bonus * 0.5 
+                            else:
+                                score += stats.get('eWAR', 0) * 40 + stats.get('HR', 0) * 12 + stats.get('W', 0) * 15 + leader_bonus
+                        
+                        elif target_award == "CyYoung":
+                            if stats['類型'] == '打者' and 'W' not in stats: continue
+                            if stats.get('ERA', 5) > 5.00: score -= 500 
+                            if voter == 'Traditional':
+                                score += stats.get('W', 0) * 20 + stats.get('SV', 0) * 15 - stats.get('ERA', 5) * 20 + leader_bonus
+                            else:
+                                score += stats.get('eWAR', 0) * 50 - stats.get('FIP', 5) * 15 - stats.get('ERA', 5) * 10
+                        
+                        elif target_award == "SilverSlugger":
+                            if stats['類型'] == '投手': continue
+                            if voter == 'Traditional': score += stats.get('HR', 0) * 25 + stats.get('AVG', 0) * 100 + leader_bonus
+                            else: score += stats.get('eWAR', 0) * 20 + stats.get('OPS+', 0) * 2
+                        
+                        elif target_award == "FMVP":
+                            if winner_team and f"[{winner_team}]" not in name:
+                                score -= 1000
+                                
+                            if stats['類型'] == '打者':
+                                score += stats.get('HR', 0) * 40 + stats.get('RBI', 0) * 20 + stats.get('OPS+', 0) * 0.5
+                            else:
+                                score += stats.get('W', 0) * 35 + stats.get('SV', 0) * 25 - stats.get('ERA', 5) * 15
+                            score += stats.get('eWAR', 0) * 60 
+
+                        scores[name] = score + random.uniform(0, 5) 
+                    
+                    if not scores: continue
+                    
+                    top5 = sorted(scores.items(), key=lambda x: x[1], reverse=True)[:5]
+                    if len(top5) >= 1:
+                        results[top5[0][0]]['1st'] += 1
+                        results[top5[0][0]]['Points'] += 14
+                    if len(top5) >= 2:
+                        results[top5[1][0]]['2nd'] += 1
+                        results[top5[1][0]]['Points'] += 9
+                    if len(top5) >= 3:
+                        results[top5[2][0]]['3rd'] += 1
+                        results[top5[2][0]]['Points'] += 8
+                    if len(top5) >= 4: results[top5[3][0]]['Points'] += 5
+                    if len(top5) >= 5: results[top5[4][0]]['Points'] += 3
+                        
+                df_res = pd.DataFrame.from_dict(results, orient='index').reset_index()
+                df_res.columns = ['球員', '第一名選票', '第二名選票', '第三名選票', '總積分']
+                df_res = df_res[df_res['總積分'] > 0].sort_values('總積分', ascending=False).reset_index(drop=True)
+                df_res.index = df_res.index + 1 
+                return df_res
+
+            # ==================================
+            # 🏆 按下「例行賽大獎」時的結算區塊
+            # ==================================
+            if btn_reg:
+                with st.spinner("30 位 AI 記者正在查閱例行賽數據..."):
+                    time.sleep(1.5)
+                    cand_reg, lead_reg = extract_stats("例行賽", QUALIFY_PA, QUALIFY_IP)
+                    
+                    st.balloons()
+                    st.markdown("## 📅 例行賽大獎 (Regular Season Awards)")
+                    
+                    st.subheader(f"🏆 {target_season} 年度最有價值球員 (MVP)")
+                    mvp_df = simulate_voting(cand_reg, lead_reg, "MVP")
+                    if not mvp_df.empty:
+                        st.success(f"🥇 **年度 MVP 得主：{mvp_df.iloc[0]['球員']}**")
+                        st.dataframe(mvp_df.head(10).style.format({'第一名選票': '{:.0f}', '第二名選票': '{:.0f}', '第三名選票': '{:.0f}', '總積分': '{:.0f}'}), use_container_width=True)
+                    else: st.info("例行賽：查無符合資格的球員。")
+
+                    st.subheader(f"🎯 {target_season} 賽揚獎 (Cy Young Award)")
+                    cy_df = simulate_voting(cand_reg, lead_reg, "CyYoung")
+                    if not cy_df.empty:
+                        st.info(f"🥇 **賽揚獎得主：{cy_df.iloc[0]['球員']}**")
+                        st.dataframe(cy_df.head(5).style.format({'第一名選票': '{:.0f}', '第二名選票': '{:.0f}', '第三名選票': '{:.0f}', '總積分': '{:.0f}'}), use_container_width=True)
+                    else: st.info("例行賽：查無符合資格的投手。")
+
+                    st.subheader(f"🏏 {target_season} 最佳打者 (銀棒獎)")
+                    ss_df = simulate_voting(cand_reg, lead_reg, "SilverSlugger")
+                    if not ss_df.empty:
+                        st.warning(f"🥇 **銀棒獎得主：{ss_df.iloc[0]['球員']}**")
+                        st.dataframe(ss_df.head(5).style.format({'第一名選票': '{:.0f}', '第二名選票': '{:.0f}', '第三名選票': '{:.0f}', '總積分': '{:.0f}'}), use_container_width=True)
+                    else: st.info("例行賽：查無符合資格的打者。")
+
+            # ==================================
+            # 💍 按下「世界大賽 FMVP」時的結算區塊
+            # ==================================
+            if btn_ws:
+                with st.spinner("30 位 AI 記者正在查閱世界大賽戰報..."):
+                    time.sleep(1.5)
+                    cand_ws, lead_ws = extract_stats("世界大賽", 3.0, 1.0) 
+                    
+                    ws_winner = None
+                    if not df_p_raw.empty:
+                        df_p_ws = df_p_raw[(df_p_raw['賽事階段'].astype(str).str.contains(prefix, regex=False)) & (df_p_raw['賽事階段'].astype(str).str.contains("世界大賽", regex=False))]
+                        if not df_p_ws.empty:
+                            wins_series = df_p_ws[df_p_ws['勝敗'] == '勝'].groupby('球隊').size()
+                            if not wins_series.empty: ws_winner = wins_series.idxmax()
+                            
+                    st.balloons()
+                    st.markdown("## 💍 季後賽最高榮耀 (Postseason Honors)")
+                    
+                    st.subheader(f"🎆 {target_season} 世界大賽最有價值球員 (World Series MVP)")
+                    fmvp_df = simulate_voting(cand_ws, lead_ws, "FMVP", winner_team=ws_winner)
+                    
+                    if not fmvp_df.empty:
+                        st.error(f"💍 **FMVP 得主：{fmvp_df.iloc[0]['球員']}** (帶領 {ws_winner if ws_winner else '球隊'} 拿下最終金盃！)")
+                        st.dataframe(fmvp_df.head(5).style.format({'第一名選票': '{:.0f}', '第二名選票': '{:.0f}', '第三名選票': '{:.0f}', '總積分': '{:.0f}'}), use_container_width=True)
+                    else: st.info("尚未產生世界大賽數據，或無人達標。快去打世界大賽吧！")

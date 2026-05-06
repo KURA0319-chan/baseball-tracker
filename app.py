@@ -47,10 +47,29 @@ def get_sheet():
     except Exception as e:
         st.error(f"連線失敗：{e}")
         return None
+
+# ==========================================
+# ✨ 本地端硬碟記憶體 (Long-Term Memory)
+# ==========================================
+SETTINGS_FILE = "settings.json"
+
+# 教系統怎麼「讀取」設定
+def load_settings():
+    import os
+    import json
+    if os.path.exists(SETTINGS_FILE):
+        try:
+            with open(SETTINGS_FILE, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except: return {}
+    return {}
+
+# 教系統怎麼「儲存」設定
 def save_settings():
+    import json
     data = {
-        "lineups": st.session_state.lineups,
-        "pitchers": st.session_state.pitchers,
+        "lineups": st.session_state.get("lineups", {'LAA': ["" for _ in range(9)], 'LAD': ["" for _ in range(9)]}),
+        "pitchers": st.session_state.get("pitchers", {'LAA': "", 'LAD': ""}),
         "default_season": st.session_state.get("f_season", "十年總成績")
     }
     try:
@@ -67,25 +86,10 @@ if 'pitchers' not in st.session_state:
     st.session_state.pitchers = saved_data.get("pitchers", {'LAA': "", 'LAD': ""})
 if 'default_season' not in st.session_state:
     st.session_state.default_season = saved_data.get("default_season", "十年總成績")
-
-if st.session_state.clear_bat:
-    for key in bat_keys: st.session_state[key] = 0
+    
+# 確保打擊欄位清除的狀態不會報錯
+if 'clear_bat' not in st.session_state:
     st.session_state.clear_bat = False
-    st.session_state.clear_bat = False 
-
-if st.session_state.clear_pitch:
-    for key in pitch_keys: st.session_state[key] = 0
-    st.session_state.clear_pitch = False 
-
-@st.cache_resource
-def get_sheet():
-    try:
-        gc = gspread.service_account(filename=SERVICE_ACCOUNT_FILE)
-        return gc.open(SHEET_NAME)
-    except Exception as e:
-        st.error(f"連線失敗：{e}")
-        return None
-
 @st.cache_data(ttl=15)
 def get_raw_records(sheet_name):
     sh = get_sheet()

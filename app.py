@@ -32,16 +32,21 @@ if 'clear_pitch' not in st.session_state: st.session_state.clear_pitch = False
 # ==========================================
 # ✨ 本地端硬碟記憶體 (Long-Term Memory)
 # ==========================================
-SETTINGS_FILE = "settings.json"
-
-def load_settings():
-    if os.path.exists(SETTINGS_FILE):
-        try:
-            with open(SETTINGS_FILE, "r", encoding="utf-8") as f:
-                return json.load(f)
-        except: return {}
-    return {}
-
+@st.cache_resource
+def get_sheet():
+    try:
+        # ✨ 雙引擎連線模式 (雲端保險箱 / 本機檔案)
+        if "GOOGLE_CREDENTIALS" in st.secrets:
+            import json
+            creds_dict = json.loads(st.secrets["GOOGLE_CREDENTIALS"])
+            gc = gspread.service_account_from_dict(creds_dict)
+        else:
+            gc = gspread.service_account(filename='baseball.json')
+            
+        return gc.open(SHEET_NAME)
+    except Exception as e:
+        st.error(f"連線失敗：{e}")
+        return None
 def save_settings():
     data = {
         "lineups": st.session_state.lineups,

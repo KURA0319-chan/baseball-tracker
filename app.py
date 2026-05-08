@@ -50,6 +50,9 @@ def get_sheet():
         st.error(f"連線失敗：{e}")
         return None
 
+# ==========================================
+# 本地端硬碟記憶體
+# ==========================================
 SETTINGS_FILE = "settings.json"
 
 def load_settings():
@@ -97,8 +100,6 @@ def get_player_list(sheet_name):
 def get_career_stats():
     records_b = get_raw_records("打擊單場紀錄")
     records_p = get_raw_records("投手單場紀錄")
-    df_b_agg = pd.DataFrame()
-    df_p_agg = pd.DataFrame()
     
     try:
         if records_b:
@@ -120,7 +121,7 @@ def get_career_stats():
 # 網頁介面設計
 # ==========================================
 st.set_page_config(page_title="LAA vs LAD 數據中心", page_icon="⚾", layout="wide")
-st.title("⚾ 洛杉磯雙雄數據追蹤系統 V30 (二刀流制霸版)")
+st.title("⚾ 洛杉磯雙雄數據追蹤系統 V31 (終極盤口版)")
 
 tab1, tab2, tab3, tab4, tab5 = st.tabs(["⚾ 打擊單場輸入", "🥎 投球單場輸入", "🏆 累積數據總表", "📋 賽前戰情室", "🎖️ 聯盟大獎預測"])
 
@@ -272,8 +273,6 @@ with tab3:
         * **WAR (勝場貢獻值)：** 衡量一名球員「比替補多替球隊拿幾勝」。本系統特製 **eWAR** 是透過 OPS+ 與 FIP 精算而成。
         * **OPS+：** **100 為全聯盟平均**。150 代表火力比平均高出 50%。
         * **FIP (獨立防禦率)：** 剔除守備與運氣成分。
-          * 📉 **FIP < ERA：** 投得很好，但運氣差或隊友雷，實力被低估。
-          * 📈 **FIP > ERA：** 帳面好看，但很多出局是靠隊友，隨時可能核爆。
         * **ISO (純長打率)：** > **0.200** 就是貨真價實的重砲手。
         * **BABIP (場內安打率)：** 異常高代表強運；異常低則是地獄倒楣鬼。
         * **WHIP (每局被上壘率)：** < **1.20** 就算是非常優秀的投手。
@@ -795,7 +794,6 @@ with tab4:
         outs = (pd.to_numeric(sub['局數(整數)'], errors='coerce').fillna(0) * 3 + pd.to_numeric(sub['局數(出局數)'], errors='coerce').fillna(0)).sum()
         return (outs / 3.0) / len(sub)
 
-    # ✨ 國際賭盤賠率轉換公式 (Moneyline)
     def calc_moneyline(prob):
         if prob > 50:
             return f"-{int(round((prob / (100.0 - prob)) * 100))}"
@@ -805,28 +803,44 @@ with tab4:
             return "PK"
 
     def calc_win_prob():
+        import math
+        
+        # 1. 計算打線總 eWAR (9個人的累積)
         laa_b_ewar = sum([curr_b_stats.get('LAA', {}).get(p, {'eWAR':0})['eWAR'] for p in laa_batters])
         lad_b_ewar = sum([curr_b_stats.get('LAD', {}).get(p, {'eWAR':0})['eWAR'] for p in lad_batters])
         
-        laa_sp_ewar = curr_p_stats.get('LAA', {}).get(laa_sp, {'eWAR':0})['eWAR'] * 2.5 if laa_sp != "未指定" else 0
-        lad_sp_ewar = curr_p_stats.get('LAD', {}).get(lad_sp, {'eWAR':0})['eWAR'] * 2.5 if lad_sp != "未指定" else 0
+        # 2. 計算先發投手 eWAR (✨ 史詩級強化：單場先發投手影響力極大，給予 5.0 倍權重)
+        sp_multiplier = 5.0 
+        laa_sp_ewar = curr_p_stats.get('LAA', {}).get(laa_sp, {'eWAR':0})['eWAR'] * sp_multiplier if laa_sp != "未指定" else 0
+        lad_sp_ewar = curr_p_stats.get('LAD', {}).get(lad_sp, {'eWAR':0})['eWAR'] * sp_multiplier if lad_sp != "未指定" else 0
         
-        laa_total = laa_b_ewar + laa_sp_ewar
-        lad_total = lad_b_ewar + lad_sp_ewar
+        # 3. 計算近況動能 (將連勝敗轉換為隱藏的戰力加成)
+        laa_momentum = get_streak_bonus('LAA') / 3.0 
+        lad_momentum = get_streak_bonus('LAD') / 3.0
         
-        laa_momentum = get_streak_bonus('LAA')
-        lad_momentum = get_streak_bonus('LAD')
-        
-        diff = laa_total - lad_total
-        laa_prob = 50.0 + (diff * 3.0) + laa_momentum - lad_momentum
-        
+        # 4. 牛棚假先發懲罰 (✨ 懲罰加重：派牛棚先發，等於開局自動送對方一個全明星級 eWAR 的優勢)
         is_laa_op = laa_sp != "未指定" and get_avg_ip('LAA', laa_sp) < 3.0
         is_lad_op = lad_sp != "未指定" and get_avg_ip('LAD', lad_sp) < 3.0
         
-        if is_laa_op: laa_prob -= 4.0
-        if is_lad_op: laa_prob += 4.0
+        laa_penalty = -3.0 if is_laa_op else 0
+        lad_penalty = -3.0 if is_lad_op else 0
         
-        laa_prob = max(5.0, min(95.0, laa_prob)) 
+        # 5. 總合球隊戰力指數 (Total Power Index)
+        laa_power = laa_b_ewar + laa_sp_ewar + laa_momentum + laa_penalty
+        lad_power = lad_b_ewar + lad_sp_ewar + lad_momentum + lad_penalty
+        
+        # 6. 羅吉斯迴歸模型 (Logistic S-Curve)
+        delta = laa_power - lad_power
+        
+        # k=0.12 讓曲線平滑：戰力懸殊時最多壓在 85%，但如果弱隊派王牌 vs 強隊派牛棚，勝率會劇烈翻轉
+        k = 0.12 
+        
+        laa_prob_raw = 1 / (1 + math.exp(-k * delta))
+        laa_prob = round(laa_prob_raw * 100, 1)
+        
+        # 設定絕對地板與天花板
+        laa_prob = max(15.0, min(85.0, laa_prob)) 
+        
         return round(laa_prob, 1), round(100.0 - laa_prob, 1), is_laa_op, is_lad_op
 
     prob_laa, prob_lad, is_laa_opener, is_lad_opener = calc_win_prob()
@@ -873,7 +887,6 @@ with tab4:
                 elif streak_type == 'L': return f"**{streak_count} 連敗** 🧊"
                 else: return f"**{streak_count} 連和** 🤝"
 
-            # ✨ 修正牛棚 ERA 校正邏輯 (先找出每場局數最多的人當先發，其餘全算牛棚)
             def get_bullpen_era(team_name):
                 if df_p_full.empty: return None
                 prefix = "" if wr_season == "十年總成績" else f"[S{wr_season.split(' ')[1]}]"
@@ -887,7 +900,7 @@ with tab4:
                     group_copy['局數_num'] = pd.to_numeric(group_copy['局數(整數)'], errors='coerce').fillna(0) * 3 + pd.to_numeric(group_copy['局數(出局數)'], errors='coerce').fillna(0)
                     if group_copy['局數_num'].sum() > 0:
                         group_copy = group_copy.sort_values(by='局數_num', ascending=False)
-                        bp_group = group_copy.iloc[1:] # 扣掉第一名(先發)，其餘都是牛棚
+                        bp_group = group_copy.iloc[1:] 
                         bp_outs += bp_group['局數_num'].sum()
                         bp_er += pd.to_numeric(bp_group['自責分'], errors='coerce').fillna(0).sum()
                 
@@ -996,7 +1009,7 @@ with tab4:
             st.error(f"🎙️ **AI 魔球推演：** {random.choice(tactics)}")
 
 # ==========================================
-# --- 分頁 5：🎖️ 聯盟大獎預測 (二刀流制霸版) ---
+# --- 分頁 5：🎖️ 聯盟大獎預測 ---
 # ==========================================
 with tab5:
     st.header("🎖️ 全美棒球記者協會 (BBWAA) 年度大獎開票所")
@@ -1060,7 +1073,6 @@ with tab5:
                         ewar = ((5.00 - tra) / 1.5) * (ip_calc / 10)
                         
                         name = f"[{row['球隊']}] {row['投手姓名']}"
-                        # ✨ 二刀流邏輯合併
                         if name in cand_b: 
                             cand_b[name]['類型'] = '二刀流'
                             cand_b[name]['eWAR'] += ewar 
@@ -1086,38 +1098,48 @@ with tab5:
                 results = {name: {'1st': 0, '2nd': 0, '3rd': 0, 'Points': 0} for name in candidates}
                 voter_types = ['Traditional']*12 + ['Sabermetric']*10 + ['Balanced']*8
                 
-                max_hr, max_rbi, max_w, max_k = leaders['HR'], leaders['RBI'], leaders['W'], leaders['K']
+                max_hr, max_rbi, max_w, max_k = leaders.get('HR', 0), leaders.get('RBI', 0), leaders.get('W', 0), leaders.get('K', 0)
+                
+                min_era = 99.9
+                for stats in candidates.values():
+                    if stats['類型'] in ['投手', '二刀流'] and 'ERA' in stats:
+                        if stats['ERA'] < min_era: min_era = stats['ERA']
                 
                 for voter in voter_types:
                     scores = {}
                     for name, stats in candidates.items():
                         score = 0
                         leader_bonus = 0
+                        
                         if target_award != "FMVP": 
-                            if stats.get('HR', 0) == max_hr and max_hr > 0: leader_bonus += 50
-                            if stats.get('RBI', 0) == max_rbi and max_rbi > 0: leader_bonus += 30
-                            if stats.get('W', 0) == max_w and max_w > 0: leader_bonus += 50
+                            if stats.get('HR', 0) == max_hr and max_hr > 0: leader_bonus += 30
+                            if stats.get('RBI', 0) == max_rbi and max_rbi > 0: leader_bonus += 20
+                            if stats.get('W', 0) == max_w and max_w > 0: leader_bonus += 10
+                            if stats.get('K', 0) == max_k and max_k > 0: leader_bonus += 20
+                            if stats.get('ERA', 99.9) == min_era and min_era < 4.0: leader_bonus += 35
                         
                         if target_award == "MVP":
                             if voter == 'Traditional':
                                 if stats['類型'] in ['打者', '二刀流']:
-                                    score += stats.get('HR', 0) * 20 + stats.get('RBI', 0) * 10 + leader_bonus * 1.5 
+                                    score += stats.get('HR', 0) * 20 + stats.get('RBI', 0) * 10 + leader_bonus 
                                     if stats.get('AVG', 0) > 0.300: score += 20
                                     elif stats.get('AVG', 0) < 0.250: score -= 30
                                 if stats['類型'] in ['投手', '二刀流']:
-                                    score += stats.get('W', 0) * 25 + stats.get('SV', 0) * 10 - stats.get('ERA', 5) * 5 + leader_bonus * 1.5
+                                    score += stats.get('W', 0) * 12 + stats.get('SV', 0) * 10 + stats.get('K', 0) * 1.5 - stats.get('ERA', 5) * 15 + leader_bonus
+                                    if stats.get('ERA', 5) < 3.00: score += 25
                             elif voter == 'Sabermetric':
-                                score += stats.get('eWAR', 0) * 80 + leader_bonus * 0.5 
-                            else:
-                                score += stats.get('eWAR', 0) * 40 + stats.get('HR', 0) * 12 + stats.get('W', 0) * 15 + leader_bonus
+                                score += stats.get('eWAR', 0) * 80 + leader_bonus * 0.2 
+                            else: 
+                                score += stats.get('eWAR', 0) * 50 + stats.get('HR', 0) * 12 + stats.get('W', 0) * 5 + stats.get('K', 0) * 1 - stats.get('ERA', 5) * 10 + leader_bonus * 0.5
                         
                         elif target_award == "CyYoung":
                             if stats['類型'] == '打者': continue
                             if stats.get('ERA', 5) > 5.00: score -= 500 
                             if voter == 'Traditional':
-                                score += stats.get('W', 0) * 20 + stats.get('SV', 0) * 15 - stats.get('ERA', 5) * 20 + leader_bonus
+                                score += stats.get('W', 0) * 12 + stats.get('SV', 0) * 12 + stats.get('K', 0) * 1.5 - stats.get('ERA', 5) * 20 + leader_bonus
+                                if stats.get('ERA', 5) < 2.50: score += 30
                             else:
-                                score += stats.get('eWAR', 0) * 50 - stats.get('FIP', 5) * 15 - stats.get('ERA', 5) * 10
+                                score += stats.get('eWAR', 0) * 60 - stats.get('FIP', 5) * 15 - stats.get('ERA', 5) * 10 + leader_bonus * 0.5
                         
                         elif target_award == "SilverSlugger":
                             if stats['類型'] == '投手': continue
@@ -1131,7 +1153,7 @@ with tab5:
                             if stats['類型'] in ['打者', '二刀流']:
                                 score += stats.get('HR', 0) * 40 + stats.get('RBI', 0) * 20 + stats.get('OPS+', 0) * 0.5
                             if stats['類型'] in ['投手', '二刀流']:
-                                score += stats.get('W', 0) * 35 + stats.get('SV', 0) * 25 - stats.get('ERA', 5) * 15
+                                score += stats.get('W', 0) * 25 + stats.get('SV', 0) * 25 + stats.get('K', 0) * 2 - stats.get('ERA', 5) * 20
                             score += stats.get('eWAR', 0) * 60 
 
                         scores[name] = score + random.uniform(0, 5) 

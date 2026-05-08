@@ -118,7 +118,7 @@ def get_career_stats():
 # 網頁介面設計
 # ==========================================
 st.set_page_config(page_title="LAA vs LAD 數據中心", page_icon="⚾", layout="wide")
-st.title("⚾ 洛杉磯雙雄數據追蹤系統 V38 (開幕戰歸零版)")
+st.title("⚾ 洛杉磯雙雄數據追蹤系統 V39 (真理先發版)")
 
 tab1, tab2, tab3, tab4, tab5 = st.tabs(["⚾ 打擊單場輸入", "🥎 投球單場輸入", "🏆 累積數據總表", "📋 賽前戰情室", "🎖️ 聯盟大獎預測"])
 
@@ -331,6 +331,7 @@ with tab3:
                 elif any('敗' in x for x in res): losses += 1
                 else: draws += 1 
                 
+                # ✨ 真理判定：這場比賽第一位登錄的就是先發，不再管局數！
                 if not group.empty:
                     starters.append(group.iloc[0]['投手姓名'])
             
@@ -637,7 +638,7 @@ with tab3:
     else: st.info("目前沒有投球紀錄可以顯示！")
 
 # ==========================================
-# --- 分頁 4：📋 賽前戰情室 ---
+# --- 分頁 4：📋 賽前戰情室 (教練團控管+大賽軟手判定版) ---
 # ==========================================
 with tab4:
     st.header("📋 賽前戰情室與 AI 深度戰報")
@@ -748,7 +749,7 @@ with tab4:
     cached_players_b = get_player_list("打擊單場紀錄")
     cached_players_p = get_player_list("投手單場紀錄")
 
-    # ✨ 新增：計算牛棚疲勞名單
+    # ✨ 新增：計算牛棚疲勞名單 (真理先發排除版)
     def get_unavailable_bullpen(team_name):
         df_p_full = st.session_state.get('df_p_raw', pd.DataFrame())
         if df_p_full.empty: return []
@@ -932,7 +933,6 @@ with tab4:
         df_p_full = st.session_state.get('df_p_raw', pd.DataFrame())
         if df_p_full.empty: return 0
         
-        # ✨ 新增：只抓取當前選擇的賽季，確保新賽季連勝敗自動歸零！
         if wr_season != "十年總成績":
             s_num = wr_season.split(" ")[1]
             prefix = f"[S{s_num}]"
@@ -962,13 +962,26 @@ with tab4:
         elif streak_type == 'L': return streak_count * -1.5
         else: return 0
 
-    def get_avg_ip(team_name, p_name):
+    # ✨ 完美修正假先發判定：不再看局數！看這名投手生涯擔任「先發」的比例！
+    def get_starter_ratio(team_name, p_name):
         df_p_full = st.session_state.get('df_p_raw', pd.DataFrame())
-        if df_p_full.empty: return 5.0
-        sub = df_p_full[(df_p_full['球隊'] == team_name) & (df_p_full['投手姓名'] == p_name)]
-        if sub.empty: return 5.0
-        outs = (pd.to_numeric(sub['局數(整數)'], errors='coerce').fillna(0) * 3 + pd.to_numeric(sub['局數(出局數)'], errors='coerce').fillna(0)).sum()
-        return (outs / 3.0) / len(sub)
+        if df_p_full.empty: return 1.0 
+        
+        t_df = df_p_full[df_p_full['球隊'] == team_name]
+        if t_df.empty: return 1.0
+        
+        total_apps = 0
+        starts = 0
+        for stage, group in t_df.groupby('賽事階段', sort=False):
+            g_sorted = group.sort_values('時間戳記', ascending=True)
+            if not g_sorted.empty:
+                if p_name in g_sorted['投手姓名'].values:
+                    total_apps += 1
+                    if g_sorted.iloc[0]['投手姓名'] == p_name:
+                        starts += 1
+                        
+        if total_apps == 0: return 1.0
+        return starts / total_apps
 
     def calc_moneyline(prob):
         if prob > 50:
@@ -1007,9 +1020,9 @@ with tab4:
         laa_momentum = get_streak_bonus('LAA', is_ws_mode) / 3.0 
         lad_momentum = get_streak_bonus('LAD', is_ws_mode) / 3.0
         
-        # ✨ 修正：針對 3 局制賽事，假先發門檻等比例調降為 < 1.0 局
-        is_laa_op = laa_sp != "未指定" and get_avg_ip('LAA', laa_sp) < 1.0
-        is_lad_op = lad_sp != "未指定" and get_avg_ip('LAD', lad_sp) < 1.0
+        # ✨ 生涯先發比例小於等於 30% 就是假先發！
+        is_laa_op = laa_sp != "未指定" and get_starter_ratio('LAA', laa_sp) <= 0.30
+        is_lad_op = lad_sp != "未指定" and get_starter_ratio('LAD', lad_sp) <= 0.30
         
         laa_penalty = -3.0 if is_laa_op else 0
         lad_penalty = -3.0 if is_lad_op else 0
@@ -1039,7 +1052,7 @@ with tab4:
     
     msg = "💡 **AI 魔球演算模型**：納入打線、先發(權重5倍)、與球隊連勝動能。"
     if is_ws_mode: msg += " 🏆 **[世界大賽模式] 已強制套用季後賽手感加權！**"
-    if is_laa_opener or is_lad_opener: msg += " ⚠️ **偵測到牛棚假先發 (平均<1局)，勝率已大幅調降。**"
+    if is_laa_opener or is_lad_opener: msg += " ⚠️ **偵測到牛棚假先發 (生涯先發比例過低)，勝率已大幅調降。**"
     st.caption(msg)
 
     st.markdown("---")
@@ -1097,7 +1110,7 @@ with tab4:
                 
                 bp_outs, bp_er = 0, 0
                 for stage, group in t_df.groupby('賽事階段', sort=False):
-                    g_sorted = group.sort_values('時間戳記')
+                    g_sorted = group.sort_values('時間戳記', ascending=True) # ✨ 真理判定：登錄時間為主
                     if len(g_sorted) > 1:
                         bp_group = g_sorted.iloc[1:] 
                         bp_outs += (pd.to_numeric(bp_group['局數(整數)'], errors='coerce').fillna(0) * 3 + pd.to_numeric(bp_group['局數(出局數)'], errors='coerce').fillna(0)).sum()

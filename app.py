@@ -50,9 +50,6 @@ def get_sheet():
         st.error(f"連線失敗：{e}")
         return None
 
-# ==========================================
-# 本地端硬碟記憶體
-# ==========================================
 SETTINGS_FILE = "settings.json"
 
 def load_settings():
@@ -121,7 +118,7 @@ def get_career_stats():
 # 網頁介面設計
 # ==========================================
 st.set_page_config(page_title="LAA vs LAD 數據中心", page_icon="⚾", layout="wide")
-st.title("⚾ 洛杉磯雙雄數據追蹤系統 V31 (終極盤口版)")
+st.title("⚾ 洛杉磯雙雄數據追蹤系統 V33 (智腦球評版)")
 
 tab1, tab2, tab3, tab4, tab5 = st.tabs(["⚾ 打擊單場輸入", "🥎 投球單場輸入", "🏆 累積數據總表", "📋 賽前戰情室", "🎖️ 聯盟大獎預測"])
 
@@ -273,8 +270,8 @@ with tab3:
         * **WAR (勝場貢獻值)：** 衡量一名球員「比替補多替球隊拿幾勝」。本系統特製 **eWAR** 是透過 OPS+ 與 FIP 精算而成。
         * **OPS+：** **100 為全聯盟平均**。150 代表火力比平均高出 50%。
         * **FIP (獨立防禦率)：** 剔除守備與運氣成分。
-        * **ISO (純長打率)：** > **0.200** 就是貨真價實的重砲手。
-        * **BABIP (場內安打率)：** 異常高代表強運；異常低則是地獄倒楣鬼。
+        * **HR/9 (每九局被全壘打)：** 投手飛球控制力的指標。
+        * **P/IP (每局用球數)：** 投手效率指標。**14球以下**為極致省球，**18球以上**代表常陷入纏鬥。
         * **WHIP (每局被上壘率)：** < **1.20** 就算是非常優秀的投手。
         """)
 
@@ -321,21 +318,17 @@ with tab3:
         
         team_data = []
         for team in TEAMS:
-            t_p = stand_p[stand_p['球隊'] == team]
+            t_p = stand_p[stand_p['球隊'] == team].sort_values('時間戳記')
             t_b = stand_b[stand_b['球隊'] == team] if not stand_b.empty else pd.DataFrame()
             
             wins, losses, draws = 0, 0, 0
             starters = []
             
-            for stage, group in t_p.groupby('賽事階段'):
-                group = group.sort_values('時間戳記')
+            for stage, group in t_p.groupby('賽事階段', sort=False):
                 res = group['勝敗'].astype(str).values
-                
-                # 模糊判定勝敗
                 if any('勝' in x for x in res): wins += 1
                 elif any('敗' in x for x in res): losses += 1
                 else: draws += 1 
-                
                 starters.append(group.iloc[0]['投手姓名'])
             
             rs = pd.to_numeric(t_b['得分'], errors='coerce').sum() if not t_b.empty else 0
@@ -478,6 +471,10 @@ with tab3:
         else:
             p_cols = ['局數(整數)', '局數(出局數)', '打者數', '投球數', '被安打', '被全壘打', '四壞球', '奪三振', '失分', '自責分']
             agg_p = curr_p.groupby(['球隊', '投手姓名'])[p_cols].sum().reset_index()
+            
+            apps = curr_p.groupby(['球隊', '投手姓名']).size().reset_index(name='出賽數')
+            agg_p = pd.merge(agg_p, apps, on=['球隊', '投手姓名'], how='left')
+            
             stats_counts = curr_p.groupby(['球隊', '投手姓名', '勝敗']).size().unstack(fill_value=0).reset_index()
             for col in ['勝', '敗', '中繼', '救援']:
                 if col not in stats_counts.columns: stats_counts[col] = 0
@@ -488,6 +485,9 @@ with tab3:
             ip_calc = total_outs / 3.0
             agg_p['實際局數'] = ip_calc
             agg_p['總局數'] = (total_outs // 3) + (total_outs % 3) / 10.0
+            
+            agg_p['NP'] = agg_p['投球數']
+            agg_p['P/IP'] = (agg_p['NP'] / agg_p['實際局數'].replace(0, 1)).fillna(0)
             
             agg_p['ERA'] = ((agg_p['自責分'] * 9) / ip_calc.replace(0, 1)).fillna(0)
             agg_p['WHIP'] = ((agg_p['被安打'] + agg_p['四壞球']) / ip_calc.replace(0, 1)).fillna(0)
@@ -558,7 +558,7 @@ with tab3:
             df_sum_p = pd.DataFrame(summary_p)
             st.dataframe(df_sum_p.style.format({'ERA': '{:.2f}', 'FIP': '{:.2f}', 'WHIP': '{:.2f}', 'K/9': '{:.2f}', 'BB/9': '{:.2f}'}), use_container_width=True, hide_index=True)
             
-            show_cols_p = ['球隊', '投手姓名', '勝投', '中繼成功', '救援成功', 'ERA', 'FIP', 'WHIP', 'K/9', 'BB/9', 'HR/9', 'K/BB', '總局數', '奪三振', 'eWAR']
+            show_cols_p = ['球隊', '投手姓名', '出賽數', '勝投', '中繼成功', '救援成功', 'ERA', 'FIP', 'WHIP', 'K/9', 'BB/9', 'HR/9', 'P/IP', '總局數', '奪三振', 'eWAR']
             show_p = agg_p[show_cols_p].copy()
             show_p = show_p.sort_values(by=['球隊', 'FIP'], ascending=[True, True])
 
@@ -568,7 +568,7 @@ with tab3:
                 if not team_df.empty: 
                     styled_p = team_df.drop(columns=['球隊']).style.format({
                         'ERA': '{:.2f}', 'FIP': '{:.2f}', 'WHIP': '{:.2f}',
-                        'K/9': '{:.2f}', 'BB/9': '{:.2f}', 'HR/9': '{:.2f}', 'K/BB': '{:.2f}',
+                        'K/9': '{:.2f}', 'BB/9': '{:.2f}', 'HR/9': '{:.2f}', 'P/IP': '{:.1f}',
                         '總局數': '{:.1f}', 'eWAR': '{:.1f}'
                     })
                     st.dataframe(styled_p, use_container_width=True, hide_index=True)
@@ -643,11 +643,13 @@ with tab4:
                 whip = (row['被安打'] + row['四壞球']) / max(1, ip_calc)
                 k9 = (row['奪三振'] * 9) / max(1, ip_calc)
                 
+                p_ip = row['投球數'] / max(0.1, ip_calc)
+                
                 team = row['球隊']
                 if team not in p_dict: p_dict[team] = {}
                 p_dict[team][row['投手姓名']] = {
                     'ERA': era, 'eWAR': ewar, 'K': row['奪三振'], 'FIP': fip,
-                    'WHIP': whip, 'K/9': k9
+                    'WHIP': whip, 'K/9': k9, 'P/IP': p_ip
                 }
 
         return b_dict, p_dict
@@ -770,7 +772,7 @@ with tab4:
         if df_p_full.empty: return 0
         t_df = df_p_full[df_p_full['球隊'] == team_name].sort_values(by='時間戳記', ascending=True)
         results = []
-        for stage, group in t_df.groupby('賽事階段'):
+        for stage, group in t_df.groupby('賽事階段', sort=False):
             res = group['勝敗'].astype(str).values
             if any('勝' in x for x in res): results.append('W')
             elif any('敗' in x for x in res): results.append('L')
@@ -805,40 +807,30 @@ with tab4:
     def calc_win_prob():
         import math
         
-        # 1. 計算打線總 eWAR (9個人的累積)
         laa_b_ewar = sum([curr_b_stats.get('LAA', {}).get(p, {'eWAR':0})['eWAR'] for p in laa_batters])
         lad_b_ewar = sum([curr_b_stats.get('LAD', {}).get(p, {'eWAR':0})['eWAR'] for p in lad_batters])
         
-        # 2. 計算先發投手 eWAR (✨ 史詩級強化：單場先發投手影響力極大，給予 5.0 倍權重)
         sp_multiplier = 5.0 
         laa_sp_ewar = curr_p_stats.get('LAA', {}).get(laa_sp, {'eWAR':0})['eWAR'] * sp_multiplier if laa_sp != "未指定" else 0
         lad_sp_ewar = curr_p_stats.get('LAD', {}).get(lad_sp, {'eWAR':0})['eWAR'] * sp_multiplier if lad_sp != "未指定" else 0
         
-        # 3. 計算近況動能 (將連勝敗轉換為隱藏的戰力加成)
         laa_momentum = get_streak_bonus('LAA') / 3.0 
         lad_momentum = get_streak_bonus('LAD') / 3.0
         
-        # 4. 牛棚假先發懲罰 (✨ 懲罰加重：派牛棚先發，等於開局自動送對方一個全明星級 eWAR 的優勢)
         is_laa_op = laa_sp != "未指定" and get_avg_ip('LAA', laa_sp) < 3.0
         is_lad_op = lad_sp != "未指定" and get_avg_ip('LAD', lad_sp) < 3.0
         
         laa_penalty = -3.0 if is_laa_op else 0
         lad_penalty = -3.0 if is_lad_op else 0
         
-        # 5. 總合球隊戰力指數 (Total Power Index)
         laa_power = laa_b_ewar + laa_sp_ewar + laa_momentum + laa_penalty
         lad_power = lad_b_ewar + lad_sp_ewar + lad_momentum + lad_penalty
         
-        # 6. 羅吉斯迴歸模型 (Logistic S-Curve)
         delta = laa_power - lad_power
-        
-        # k=0.12 讓曲線平滑：戰力懸殊時最多壓在 85%，但如果弱隊派王牌 vs 強隊派牛棚，勝率會劇烈翻轉
         k = 0.12 
         
         laa_prob_raw = 1 / (1 + math.exp(-k * delta))
         laa_prob = round(laa_prob_raw * 100, 1)
-        
-        # 設定絕對地板與天花板
         laa_prob = max(15.0, min(85.0, laa_prob)) 
         
         return round(laa_prob, 1), round(100.0 - laa_prob, 1), is_laa_op, is_lad_op
@@ -854,8 +846,8 @@ with tab4:
     </div>
     """, unsafe_allow_html=True)
     
-    msg = "💡 **AI 魔球演算模型**：納入打線、先發(權重2.5倍)、與球隊連勝動能。"
-    if is_laa_opener or is_lad_opener: msg += " ⚠️ **偵測到牛棚代班先發 (平均<3局)，勝率已調降。**"
+    msg = "💡 **AI 魔球演算模型**：納入打線、先發(權重5倍)、與球隊連勝動能。"
+    if is_laa_opener or is_lad_opener: msg += " ⚠️ **偵測到牛棚假先發 (平均<3局)，勝率已大幅調降。**"
     st.caption(msg)
 
     st.markdown("---")
@@ -871,7 +863,7 @@ with tab4:
                 if df_p_full.empty: return "尚無賽事"
                 t_df = df_p_full[df_p_full['球隊'] == team_name].sort_values(by='時間戳記', ascending=True)
                 results = []
-                for stage, group in t_df.groupby('賽事階段'):
+                for stage, group in t_df.groupby('賽事階段', sort=False):
                     res = group['勝敗'].astype(str).values
                     if any('勝' in x for x in res): results.append('W')
                     elif any('敗' in x for x in res): results.append('L')
@@ -891,11 +883,11 @@ with tab4:
                 if df_p_full.empty: return None
                 prefix = "" if wr_season == "十年總成績" else f"[S{wr_season.split(' ')[1]}]"
                 sub_df = df_p_full[df_p_full['賽事階段'].astype(str).str.contains(prefix, regex=False)] if prefix else df_p_full
-                t_df = sub_df[sub_df['球隊'] == team_name]
+                t_df = sub_df[sub_df['球隊'] == team_name].sort_values(by='時間戳記', ascending=True)
                 if t_df.empty: return None
                 
                 bp_outs, bp_er = 0, 0
-                for stage, group in t_df.groupby('賽事階段'):
+                for stage, group in t_df.groupby('賽事階段', sort=False):
                     group_copy = group.copy()
                     group_copy['局數_num'] = pd.to_numeric(group_copy['局數(整數)'], errors='coerce').fillna(0) * 3 + pd.to_numeric(group_copy['局數(出局數)'], errors='coerce').fillna(0)
                     if group_copy['局數_num'].sum() > 0:
@@ -937,7 +929,16 @@ with tab4:
                 p_era = prev_team_stats.get(sp, {}).get('ERA', era)
                 trend = f"(去年 ERA {p_era:.2f})" if p_era != era else ""
                 
-                insight = f"**【{team} 先發】 {sp}**\n- **數據**：ERA **{era:.2f} (聯盟第 {rank})** {trend} | eWAR **{s['eWAR']:.1f}**\n- **壓制力**：WHIP **{s['WHIP']:.2f}** | K/9 **{s['K/9']:.2f}**\n"
+                insight = f"**【{team} 先發】 {sp}**\n- **數據**：ERA **{era:.2f} (聯盟第 {rank})** {trend} | eWAR **{s['eWAR']:.1f}**\n"
+                insight += f"- **壓制與效率**：WHIP **{s['WHIP']:.2f}** | K/9 **{s['K/9']:.2f}** | 每局用球數 (P/IP) **{s['P/IP']:.1f}** 球\n"
+                
+                if s['P/IP'] > 18.0 and era < 4.0:
+                    insight += f"- ⚠️ **體力消耗警報**：雖然防禦率不錯，但每局用球數高達 {s['P/IP']:.1f} 球，這代表他容易陷入纏鬥，今晚可能投不長，牛棚需要提早熱身。\n\n"
+                elif s['P/IP'] > 0 and s['P/IP'] < 14.0 and era < 4.0:
+                    insight += f"- ⚡ **極致省球大師**：每局平均只需 {s['P/IP']:.1f} 球！他極具侵略性的投球策略能有效拉長投球局數，減輕牛棚負擔。\n\n"
+                else:
+                    insight += "\n"
+
                 fip_diff = fip - era
                 
                 if era >= 6.0 and fip >= 6.0: insight += f"- 🚨 **發球機警報 (狀況慘烈)**：無論是防禦率 ({era:.2f}) 還是 FIP ({fip:.2f}) 都突破天際的高。他目前在丘上幾乎沒有解決打者的能力，今晚隨時會被打退場。\n\n"
@@ -997,9 +998,21 @@ with tab4:
 
             st.markdown("### 🧠 數據總結推演")
             tactics = []
-            if prob_laa > 65: tactics.append(f"數據顯示 LAA 擁有壓倒性優勢，除非先發投手提早核爆，否則 LAA 勝券在握。")
-            elif prob_lad > 65: tactics.append(f"LAD 在戰力天秤上占據制高點，今晚的觀戰重點在於 LAA 能否利用牛棚漏洞進行反擊。")
-            if (get_bullpen_era("LAA") or 0) > 5.5 and (get_bullpen_era("LAD") or 0) > 5.5:
+            
+            bp_laa = get_bullpen_era("LAA") or 0.0
+            bp_lad = get_bullpen_era("LAD") or 0.0
+            
+            # ✨ 動態情境推演：將高勝率與對手真實牛棚防禦率結合
+            if prob_laa > 65:
+                if bp_lad > 4.5: tactics.append("數據顯示 LAA 擁有壓倒性優勢，且 LAD 牛棚防線脆弱，LAA 有望在比賽後半段進一步擴大領先。")
+                elif bp_laa > 4.5: tactics.append("LAA 雖然先發與打線佔優，但自家牛棚是一大隱憂。LAD 若能將戰局逼入後半段，隨時有逆轉可能。")
+                else: tactics.append("數據顯示 LAA 擁有壓倒性優勢，投打戰力完整，LAD 今晚將面臨極大考驗。")
+            elif prob_lad > 65:
+                if bp_laa > 4.5: tactics.append("LAD 在戰力天秤上占據制高點，且 LAA 牛棚防線脆弱，LAD 有望在比賽後半段進一步擴大領先。")
+                elif bp_lad > 4.5: tactics.append("LAD 雖然先發與打線佔優，但自家牛棚是一大隱憂。LAA 若能將戰局逼入後半段，隨時有逆轉可能。")
+                else: tactics.append("數據顯示 LAD 擁有壓倒性優勢，投打戰力完整，LAA 今晚將面臨極大考驗。")
+                
+            if bp_laa > 5.5 and bp_lad > 5.5:
                 tactics.append("今晚兩隊牛棚都有『放火』基因，這場比賽在第七局之後才是真正的開始，心臟不好的觀眾請準備好藥品。")
             if laa_sp != "未指定" and lad_sp != "未指定":
                 if curr_p_stats.get('LAA', {}).get(laa_sp,{'ERA':0})['ERA'] < 2.5 and curr_p_stats.get('LAD', {}).get(lad_sp,{'ERA':0})['ERA'] < 2.5:
@@ -1247,7 +1260,7 @@ with tab5:
                         def get_ws_wins(team_name):
                             t_ws = df_p_ws[df_p_ws['球隊'] == team_name]
                             w = 0
-                            for stage, group in t_ws.groupby('賽事階段'):
+                            for stage, group in t_ws.groupby('賽事階段', sort=False):
                                 res = group['勝敗'].astype(str).values
                                 if any('勝' in x for x in res): w += 1
                             return w

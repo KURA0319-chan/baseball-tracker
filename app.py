@@ -1007,8 +1007,9 @@ with tab4:
         laa_momentum = get_streak_bonus('LAA', is_ws_mode) / 3.0 
         lad_momentum = get_streak_bonus('LAD', is_ws_mode) / 3.0
         
-        is_laa_op = laa_sp != "未指定" and get_avg_ip('LAA', laa_sp) < 3.0
-        is_lad_op = lad_sp != "未指定" and get_avg_ip('LAD', lad_sp) < 3.0
+        # ✨ 修正：針對 3 局制賽事，假先發門檻等比例調降為 < 1.0 局
+        is_laa_op = laa_sp != "未指定" and get_avg_ip('LAA', laa_sp) < 1.0
+        is_lad_op = lad_sp != "未指定" and get_avg_ip('LAD', lad_sp) < 1.0
         
         laa_penalty = -3.0 if is_laa_op else 0
         lad_penalty = -3.0 if is_lad_op else 0
@@ -1038,7 +1039,7 @@ with tab4:
     
     msg = "💡 **AI 魔球演算模型**：納入打線、先發(權重5倍)、與球隊連勝動能。"
     if is_ws_mode: msg += " 🏆 **[世界大賽模式] 已強制套用季後賽手感加權！**"
-    if is_laa_opener or is_lad_opener: msg += " ⚠️ **偵測到牛棚假先發 (平均<3局)，勝率已大幅調降。**"
+    if is_laa_opener or is_lad_opener: msg += " ⚠️ **偵測到牛棚假先發 (平均<1局)，勝率已大幅調降。**"
     st.caption(msg)
 
     st.markdown("---")

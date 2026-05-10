@@ -164,24 +164,32 @@ with tab1:
     available_batters = [p for p in all_team_batters if p not in inputted_batters]
 
     with col_p_b:
-        selected_p_b = st.selectbox("選擇球員", ["➕ 手動輸入新球員..."] + available_batters, key="sel_b")
-        player_b = st.text_input("輸入姓名", key="txt_b") if selected_p_b == "➕ 手動輸入新球員..." else selected_p_b
+        options_b = ["➕ 手動輸入新球員..."] + available_batters
+        selected_p_b = st.selectbox("選擇球員", options_b, key="sel_b")
+        if selected_p_b == "➕ 手動輸入新球員...": player_b = st.text_input("輸入姓名", key="txt_b")
+        else: player_b = selected_p_b
     
-    # ✨ 核心修正：強制覆寫守位狀態
-    if player_b != st.session_state.prev_player_b:
+    # ✨ 核心修正：只自動切換「守位」，絕對不碰「打席與打數」！讓它們自然繼承您的最後輸入
+    if player_b != st.session_state.get('prev_player_b', ''):
         st.session_state.prev_player_b = player_b
         if not df_b_raw.empty and player_b in df_b_raw['球員姓名'].values:
             p_history = df_b_raw[df_b_raw['球員姓名'] == player_b].sort_values('時間戳記', ascending=False)
             last_recorded_pos = p_history.iloc[0]['守位']
             if last_recorded_pos in POSITIONS:
-                st.session_state['pos_b'] = last_recorded_pos # 強制覆寫 UI 狀態
+                st.session_state['pos_b'] = last_recorded_pos 
 
     with col_pos_b:
         cur_pos_b = st.selectbox("守備位置", POSITIONS, key="pos_b")
 
     st.markdown("---")
-    st.info("💡 提醒：【安打】欄位請填寫包含長打在內的「總安打數」。(送出後會自動歸零累積數據，保留打席數方便連續登錄)")
+    st.info("💡 提醒：【安打】欄位請填寫包含長打在內的「總安打數」。(送出後會保留打席與打數以便連續登錄，其他數據自動歸零)")
     
+    # ✨ 在畫面畫出之前清空其他安打數據，避開報錯
+    if st.session_state.get('clear_bat_partial'):
+        for k in ['h_b', 'rbi_b', 'run_b', 'hr_b', 'bb_b', 'so_b', 'sb_b', 'tb2_b', 'tb3_b']:
+            if k in st.session_state: st.session_state[k] = 0
+        st.session_state.clear_bat_partial = False
+
     c1, c2, c3, c4 = st.columns(4)
     pa = c1.number_input("打席", min_value=0, step=1, key="pa_b")
     ab = c2.number_input("打數", min_value=0, step=1, key="ab_b")
@@ -219,11 +227,11 @@ with tab1:
                     ws.append_row([now, full_stage_b, team_b, player_b, pa, ab, h, tb2, tb3, hr, rbi, run, bb, so, sb, cur_pos_b])
                     st.success(f"✅ 成功儲存 {player_b} 的表現！")
                     get_raw_records.clear()
-                    st.session_state.clear_bat = True
+                    
+                    st.session_state.clear_bat_partial = True
                     time.sleep(1)
                     st.rerun() 
                 except Exception as e: st.error(f"寫入失敗：{e}")
-
 # --- 分頁 2：投球輸入 ---
 with tab2:
     st.subheader("輸入今日投球表現")

@@ -719,19 +719,20 @@ with tab3:
     else: st.info("目前沒有投球紀錄可以顯示！")
 
 # ==========================================
-# --- 分頁 4：📋 賽前戰情室 (動態陣容交換版) ---
+# --- 分頁 4：📋 賽前戰情室 (究極防護完整版) ---
 # ==========================================
 with tab4:
     st.header("📋 賽前戰情室與 AI 深度戰報")
     get_career_stats()
 
+    # --- 1. 賽季與模式選擇 ---
     season_options_wr = ["十年總成績"] + SEASONS
-    saved_wr_season = st.session_state.get("wr_season", "十年總成績")
+    saved_wr_season = st.session_state.get("wr_season_memory", "十年總成績")
     wr_s_idx = season_options_wr.index(saved_wr_season) if saved_wr_season in season_options_wr else 0
     
-    col_ai_s1, col_ai_s2 = st.columns(2)
+    col_ai_s1, col_ai_s2, col_ai_s3 = st.columns([1.2, 1, 1.2])
     def update_wr_season():
-        st.session_state.wr_season = st.session_state.wr_season_sel_v48
+        st.session_state.wr_season_memory = st.session_state.wr_season_sel_v48
         if 'save_settings' in globals(): save_settings()
         
     with col_ai_s1: 
@@ -741,7 +742,16 @@ with tab4:
             wr_mode = st.selectbox("🎯 戰報模式", ["例行賽/綜合模式", "🏆 世界大賽特別戰報"], key="wr_mode_sel_v48")
         else:
             wr_mode = "例行賽/綜合模式"
+            
+    with col_ai_s3:
+        matchup_format = st.radio("🏟️ 賽事主客場設定", ["LAA (客) @ LAD (主)", "LAD (客) @ LAA (主)"], horizontal=True, key="matchup_toggle")
+        is_laa_home = (matchup_format == "LAD (客) @ LAA (主)")
+        away_team = "LAD" if is_laa_home else "LAA"
+        home_team = "LAA" if is_laa_home else "LAD"
 
+    is_ws_mode = (wr_mode == "🏆 世界大賽特別戰報")
+
+    # --- 2. 獲取數據與動態門檻 (嚴格分離賽事階段) ---
     def get_season_data(target_season, target_stage=""):
         df_b_raw = st.session_state.get('df_b_raw', pd.DataFrame())
         df_p_raw = st.session_state.get('df_p_raw', pd.DataFrame())
@@ -781,6 +791,7 @@ with tab4:
                 bb_pct = (row['四壞球'] / max(1, row['打席'])) * 100
                 iso = (((b_1b) + 2*row['二壘安打'] + 3*row['三壘安打'] + 4*row['全壘打']) / max(1, row['打數'])) - avg
                 babip = (row['安打'] - row['全壘打']) / max(1, (row['打數'] - row['三振'] - row['全壘打']))
+                
                 team = row['球隊']
                 if team not in b_dict: b_dict[team] = {}
                 b_dict[team][row['球員姓名']] = {
@@ -801,6 +812,7 @@ with tab4:
                 whip = (row['被安打'] + row['四壞球']) / max(1, ip_calc)
                 k9 = (row['奪三振'] * 9) / max(1, ip_calc)
                 p_ip = row['投球數'] / max(0.1, ip_calc)
+                
                 team = row['球隊']
                 if team not in p_dict: p_dict[team] = {}
                 p_dict[team][row['投手姓名']] = {
@@ -811,18 +823,16 @@ with tab4:
 
         return b_dict, p_dict
 
-    is_ws_mode = (wr_mode == "🏆 世界大賽特別戰報")
+    reg_b_stats, reg_p_stats = get_season_data(wr_season, "例行賽")
+    ws_b_stats, ws_p_stats = get_season_data(wr_season, "世界大賽")
+
     if is_ws_mode:
-        curr_b_stats, curr_p_stats = get_season_data(wr_season) 
-        ws_b_stats, ws_p_stats = get_season_data(wr_season, "世界大賽")
-        reg_b_stats, reg_p_stats = get_season_data(wr_season, "例行賽")
+        curr_b_stats, curr_p_stats = ws_b_stats, ws_p_stats
     else:
-        curr_b_stats, curr_p_stats = get_season_data(wr_season)
-        ws_b_stats, ws_p_stats = {}, {}
-        reg_b_stats, reg_p_stats = {}, {}
+        curr_b_stats, curr_p_stats = reg_b_stats, reg_p_stats
         
-    display_b_stats = ws_b_stats if is_ws_mode else curr_b_stats
-    display_p_stats = ws_p_stats if is_ws_mode else curr_p_stats
+    display_b_stats = curr_b_stats
+    display_p_stats = curr_p_stats
 
     prev_season_str = "十年總成績"
     if wr_season != "十年總成績":
@@ -833,16 +843,32 @@ with tab4:
     cached_players_b = get_player_list("打擊單場紀錄")
     cached_players_p = get_player_list("投手單場紀錄")
 
+    # ✨ 修正1：確保打席與局數門檻，會嚴格區分「例行賽」與「世界大賽」的場次！
     df_b_full_raw = st.session_state.get('df_b_raw', pd.DataFrame())
     prefix_eval = "" if wr_season == "十年總成績" else f"[S{wr_season.split(' ')[1]}]"
-    b_filter_eval = df_b_full_raw[df_b_full_raw['賽事階段'].astype(str).str.contains(prefix_eval, regex=False)] if prefix_eval and not df_b_full_raw.empty else df_b_full_raw
+    stage_keyword = "世界大賽" if is_ws_mode else "例行賽"
+    
+    if not df_b_full_raw.empty:
+        b_filter_eval = df_b_full_raw[
+            (df_b_full_raw['賽事階段'].astype(str).str.contains(prefix_eval, regex=False)) & 
+            (df_b_full_raw['賽事階段'].astype(str).str.contains(stage_keyword, regex=False))
+        ]
+    else:
+        b_filter_eval = pd.DataFrame()
+        
     team_games_eval = b_filter_eval['賽事階段'].nunique() if not b_filter_eval.empty else 1
-    dyn_pa_limit = max(1.0, team_games_eval * 1.2)
-    dyn_ip_limit = max(0.1, team_games_eval * 0.33)
+    
+    # ✨ 修正 1：季後賽專屬固定門檻，不再隨場次無限縮放！
+    if is_ws_mode:
+        dyn_pa_limit = 3.0  # 世界大賽打席門檻固定為 3
+        dyn_ip_limit = 1.0  # 世界大賽局數門檻固定為 1.0 局 (投過一局就及格)
+    else:
+        dyn_pa_limit = max(1.0, team_games_eval * 1.2)
+        dyn_ip_limit = max(0.1, team_games_eval * 0.33)
 
-    def get_unavailable_bullpen(team_name):
+    def get_bullpen_status(team_name):
         df_p_full = st.session_state.get('df_p_raw', pd.DataFrame())
-        if df_p_full.empty or wr_season == "十年總成績": return []
+        if df_p_full.empty or wr_season == "十年總成績": return [], []
         s_num = wr_season.split(' ')[1]
         prefix = f"[S{s_num}] 世界大賽"
         sub_df = df_p_full[df_p_full['賽事階段'].astype(str).str.contains(prefix, regex=False)]
@@ -854,8 +880,8 @@ with tab4:
             games.append(g_sorted)
             if not g_sorted.empty: ws_starters.add(g_sorted.iloc[0]['投手姓名']) 
         
-        unavailable = []
-        if not games: return unavailable
+        unavailable, warnings = [], []
+        if not games: return unavailable, warnings
         
         last_g = games[-1]
         prev_g = games[-2] if len(games) >= 2 else pd.DataFrame()
@@ -864,7 +890,6 @@ with tab4:
         
         for p in team_pitchers:
             if p in ws_starters: continue 
-            reason = ""
             p_last = last_g[last_g['投手姓名'] == p] if not last_g.empty else pd.DataFrame()
             p_prev = prev_g[prev_g['投手姓名'] == p] if not prev_g.empty else pd.DataFrame()
             p_prev_prev = prev_prev_g[prev_prev_g['投手姓名'] == p] if not prev_prev_g.empty else pd.DataFrame()
@@ -876,51 +901,56 @@ with tab4:
             np_last = pd.to_numeric(p_last['投球數'], errors='coerce').sum() if pitched_last else 0
             np_prev = pd.to_numeric(p_prev['投球數'], errors='coerce').sum() if pitched_prev else 0
             
-            if np_last >= 25: reason = f"前場用球數達 {int(np_last)} 球 (需休 2 場)"
-            elif np_prev >= 25 and not pitched_last: reason = f"前兩場用球數達 {int(np_prev)} 球 (尚需休 1 場)"
-            elif np_last >= 15: reason = f"前場用球數達 {int(np_last)} 球 (需休 1 場)"
-            elif pitched_last and pitched_prev and pitched_prev_prev: reason = "已連續三天登板 (需休 1 場)"
+            is_banned = False
+            if np_last >= 25: unavailable.append(f"❌ {p} (前場 {int(np_last)} 球，須休 2 場)"); is_banned = True
+            elif np_prev >= 25 and not pitched_last: unavailable.append(f"❌ {p} (前兩場 {int(np_prev)} 球，尚須休 1 場)"); is_banned = True
+            elif np_last >= 15: unavailable.append(f"❌ {p} (前場 {int(np_last)} 球，須休 1 場)"); is_banned = True
+            elif pitched_last and pitched_prev and pitched_prev_prev: unavailable.append(f"❌ {p} (已連 3 場登板，須休 1 場)"); is_banned = True
                 
-            if reason: unavailable.append(f"❌ {p} ({reason})")
-        return unavailable
+            if not is_banned:
+                if pitched_last and pitched_prev: warnings.append(f"⚠️ {p} (已連 2 場登板，今日若上場明日強制禁賽)")
+                elif pitched_last: warnings.append(f"⚠️ {p} (前場出賽 {int(np_last)} 球，請注意體力條)")
+                    
+        return unavailable, warnings
 
     if is_ws_mode:
         st.markdown("---")
         st.markdown("### 🏥 牛棚疲勞管制與停賽名單 (世界大賽專屬)")
-        col_med1, col_med2 = st.columns(2)
-        with col_med1:
-            laa_unavail = get_unavailable_bullpen("LAA")
-            if laa_unavail:
-                for msg in laa_unavail: st.error(msg)
-            else: st.success("✅ LAA 牛棚全員健康，隨時待命")
-        with col_med2:
-            lad_unavail = get_unavailable_bullpen("LAD")
-            if lad_unavail:
-                for msg in lad_unavail: st.error(msg)
-            else: st.success("✅ LAD 牛棚全員健康，隨時待命")
+        col_med_left, col_med_right = st.columns(2)
+        
+        def render_bullpen_status(team):
+            unavail, warns = get_bullpen_status(team)
+            if unavail:
+                for msg in unavail: st.error(msg)
+            if warns:
+                for msg in warns: st.warning(msg)
+            if not unavail and not warns: st.success(f"✅ {team} 牛棚全員健康，隨時待命")
+                
+        with col_med_left:
+            st.write(f"**{away_team} (客場)**")
+            render_bullpen_status(away_team)
+        with col_med_right:
+            st.write(f"**{home_team} (主場)**")
+            render_bullpen_status(home_team)
 
     st.markdown("---")
     
-    # ==========================================
-    # ✨ 核心系統：動態陣容交換引擎 (Dynamic Roster Swap Engine)
-    # ==========================================
+    # --- 4. 動態陣容交換引擎 ---
     DEFAULT_9_POS = ["C", "1B", "2B", "3B", "SS", "LF", "CF", "RF", "DH"]
     
-    if 'lineups' not in st.session_state:
-        st.session_state.lineups = {'LAA': ["未指定"]*9, 'LAD': ["未指定"]*9}
-    if 'lineup_pos' not in st.session_state:
-        st.session_state.lineup_pos = {'LAA': list(DEFAULT_9_POS), 'LAD': list(DEFAULT_9_POS)}
+    if 'lineups' not in st.session_state or type(st.session_state.lineups) is not dict: st.session_state.lineups = {}
+    if 'lineup_pos' not in st.session_state or type(st.session_state.lineup_pos) is not dict: st.session_state.lineup_pos = {}
 
     for team in TEAMS:
-        if len(st.session_state.lineup_pos[team]) < 9:
-            st.session_state.lineup_pos[team] = list(DEFAULT_9_POS)
+        if team not in st.session_state.lineups: st.session_state.lineups[team] = ["未指定"] * 9
+        if team not in st.session_state.lineup_pos: st.session_state.lineup_pos[team] = list(DEFAULT_9_POS)
+        if len(set(st.session_state.lineup_pos[team])) < 9: st.session_state.lineup_pos[team] = list(DEFAULT_9_POS)
+            
         for i in range(9):
             b_key = f"{team.lower()}_b{i+1}"
             pos_key = f"{team.lower()}_pos{i+1}"
-            if b_key not in st.session_state:
-                st.session_state[b_key] = st.session_state.lineups[team][i] if len(st.session_state.lineups[team]) > i else "未指定"
-            if pos_key not in st.session_state:
-                st.session_state[pos_key] = st.session_state.lineup_pos[team][i] if len(st.session_state.lineup_pos[team]) > i else DEFAULT_9_POS[i]
+            if b_key not in st.session_state: st.session_state[b_key] = st.session_state.lineups[team][i] if len(st.session_state.lineups[team]) > i else "未指定"
+            if pos_key not in st.session_state: st.session_state[pos_key] = st.session_state.lineup_pos[team][i] if len(st.session_state.lineup_pos[team]) > i else DEFAULT_9_POS[i]
 
     def handle_lineup_change(team, idx):
         b_key = f"{team.lower()}_b{idx+1}"
@@ -956,7 +986,6 @@ with tab4:
             
             st.session_state.lineup_pos[team][idx] = new_pos
             if 'save_settings' in globals(): save_settings()
-    # ==========================================
 
     def log5(a, b, l):
         if l <= 0 or l >= 1: return 0
@@ -966,28 +995,19 @@ with tab4:
         if den == 0: return 0
         return num / den
 
-    def render_log5_card(b_name, b_team, p_name, p_team, t_color):
+    def get_x_stats(b_name, b_team, p_name, p_team):
         b_s = curr_b_stats.get(b_team, {}).get(b_name)
         p_s = curr_p_stats.get(p_team, {}).get(p_name)
-        
-        if not b_s or not p_s or b_s.get('PA', 0) == 0 or p_s.get('BF', 0) == 0:
-            return f"<div style='padding:20px; background:#111; border-radius:10px; color:#666; text-align:center;'>尚未產生足夠數據，無法預測 {b_name} vs {p_name}</div>"
-        
+        if not b_s or not p_s or b_s.get('PA', 0) == 0 or p_s.get('BF', 0) == 0: return 0, 0, 0, 0, 0
         lg_pa = sum([v.get('PA',0) for t, plrs in curr_b_stats.items() for p, v in plrs.items()])
         lg_ab = sum([v.get('AB',0) for t, plrs in curr_b_stats.items() for p, v in plrs.items()])
-        if lg_pa == 0 or lg_ab == 0: return ""
+        if lg_pa < 10 or lg_ab == 0: return 0, 0, 0, 0, 0
         
-        lg_h = sum([v.get('H',0) for t, plrs in curr_b_stats.items() for p, v in plrs.items()])
-        lg_bb = sum([v.get('BB',0) for t, plrs in curr_b_stats.items() for p, v in plrs.items()])
-        lg_hr = sum([v.get('HR',0) for t, plrs in curr_b_stats.items() for p, v in plrs.items()])
-        lg_k = sum([v.get('K',0) for t, plrs in curr_b_stats.items() for p, v in plrs.items()])
-        lg_xbh = sum([v.get('XBH',0) for t, plrs in curr_b_stats.items() for p, v in plrs.items()])
-        
-        l_ba = lg_h / max(1, lg_ab)
-        l_obp = (lg_h + lg_bb) / max(1, lg_pa)
-        l_hr = lg_hr / max(1, lg_pa)
-        l_k = lg_k / max(1, lg_pa)
-        l_xbh = lg_xbh / max(1, lg_pa)
+        l_ba = sum([v.get('H',0) for t, plrs in curr_b_stats.items() for p, v in plrs.items()]) / lg_ab
+        l_obp = sum([v.get('H',0)+v.get('BB',0) for t, plrs in curr_b_stats.items() for p, v in plrs.items()]) / lg_pa
+        l_hr = sum([v.get('HR',0) for t, plrs in curr_b_stats.items() for p, v in plrs.items()]) / lg_pa
+        l_k = sum([v.get('K',0) for t, plrs in curr_b_stats.items() for p, v in plrs.items()]) / lg_pa
+        l_xbh = sum([v.get('XBH',0) for t, plrs in curr_b_stats.items() for p, v in plrs.items()]) / lg_pa
 
         W = 10.0 
         b_ba = (b_s['H'] + l_ba * W) / (max(1, b_s['AB']) + W)
@@ -996,13 +1016,14 @@ with tab4:
         b_k = (b_s['K'] + l_k * W) / (b_s['PA'] + W)
         b_xbh = (b_s['XBH'] + l_xbh * W) / (b_s['PA'] + W)
 
-        p_bf = p_s['BF']
-        p_ab = max(1, p_bf - p_s['BB']) 
+        p_bf, p_ab = p_s['BF'], max(1, p_s['BF'] - p_s.get('BB',0))
         p_ba = (p_s['H'] + l_ba * W) / (p_ab + W)
         p_obp = (p_s['H'] + p_s['BB'] + l_obp * W) / (p_bf + W)
         p_hr = (p_s['HR'] + l_hr * W) / (p_bf + W)
         p_k = (p_s['K'] + l_k * W) / (p_bf + W)
-        p_xbh_est = p_s['HR'] + max(0, p_s['H'] - p_s['HR']) * (max(0, lg_xbh - lg_hr) / max(1, lg_h - lg_hr))
+        
+        lg_hr_tot, lg_h_tot, lg_xbh_tot = sum([v.get('HR',0) for t, plrs in curr_b_stats.items() for p, v in plrs.items()]), sum([v.get('H',0) for t, plrs in curr_b_stats.items() for p, v in plrs.items()]), sum([v.get('XBH',0) for t, plrs in curr_b_stats.items() for p, v in plrs.items()])
+        p_xbh_est = p_s['HR'] + max(0, p_s['H'] - p_s['HR']) * (max(0, lg_xbh_tot - lg_hr_tot) / max(1, lg_h_tot - lg_hr_tot))
         p_xbh = (p_xbh_est + l_xbh * W) / (p_bf + W)
 
         xBA = max(0.01, min(0.99, log5(b_ba, p_ba, l_ba)))
@@ -1010,18 +1031,23 @@ with tab4:
         xHR = max(0.001, min(0.99, log5(b_hr, p_hr, l_hr)))
         xXBH = max(0.001, min(0.99, log5(b_xbh, p_xbh, l_xbh)))
         xK = max(0.01, min(0.99, log5(b_k, p_k, l_k)))
+        return xBA, xOBP, xHR, xXBH, xK
 
+    def render_log5_card(b_name, b_team, p_name, p_team, t_color):
+        xBA, xOBP, xHR, xXBH, xK = get_x_stats(b_name, b_team, p_name, p_team)
+        if xBA == 0: return f"<div style='padding:20px; background:#111; border-radius:10px; color:#666; text-align:center;'>尚未產生足夠數據，無法預測 {b_name} vs {p_name}</div>"
+        
         def make_bar(label, prob, color, warning_threshold=None):
             p_pct = prob * 100
             warn_tag = " <span style='color:#ff4b4b; font-size:10px; font-weight:bold;'>(🚨警戒)</span>" if warning_threshold and p_pct >= warning_threshold else ""
             return f"<div style='margin-bottom:8px;'><div style='display:flex; justify-content:space-between; font-size:13px; color:#ddd; margin-bottom:2px;'><span>{label}</span><span>{p_pct:.1f}%{warn_tag}</span></div><div style='width:100%; background:#333; height:8px; border-radius:4px; overflow:hidden;'><div style='width:{p_pct}%; background:{color}; height:100%; border-radius:4px;'></div></div></div>"
         
         stats_pool = [
-            make_bar('安打機率 (xBA)', xBA, '#00e5ff'), make_bar('上壘機率 (xOBP)', xOBP, '#007bff'),
-            make_bar('長打機率 (xXBH%)', xXBH, '#ff9f00'), make_bar('開轟機率 (xHR%)', xHR, '#ff4b4b', 8.0),
-            make_bar('三振機率 (xK%)', xK, '#b052d9')
+            make_bar('預期安打 (xBA)', xBA, '#00e5ff'), make_bar('預期上壘 (xOBP)', xOBP, '#007bff'),
+            make_bar('預期長打 (xXBH%)', xXBH, '#ff9f00'), make_bar('預期全壘打 (xHR%)', xHR, '#ff4b4b', 8.0),
+            make_bar('預期被三振 (xK%)', xK, '#b052d9')
         ]
-        chosen_stats = "".join(random.sample(stats_pool, 2))
+        chosen_stats = "".join(random.sample(stats_pool, 3))
         
         html = f"<div style='background: linear-gradient(145deg, #161616 0%, #222 100%); padding: 20px; border-radius: 12px; border-left: 5px solid {t_color}; box-shadow: 0 4px 15px rgba(0,0,0,0.5);'><h4 style='color:#aaa; margin:0 0 15px 0; font-size:12px; text-transform:uppercase; letter-spacing:1px;'>📺 Spotlight Matchup</h4><div style='display:flex; justify-content:space-between; align-items:center; margin-bottom: 20px;'><div style='text-align:left; width: 40%;'><div style='font-size:10px; color:#888;'>BATTER [{b_team}]</div><div style='font-size:16px; font-weight:bold; color:white; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;'>{b_name}</div></div><div style='font-size:16px; color:#555; font-weight:900; font-style:italic;'>VS</div><div style='text-align:right; width: 40%;'><div style='font-size:10px; color:#888;'>PITCHER [{p_team}]</div><div style='font-size:16px; font-weight:bold; color:white; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;'>{p_name}</div></div></div>{chosen_stats}<div style='font-size:10px; color:#666; margin-top:15px; text-align:right;'>*Log5 Smoothed Projection</div></div>"
         return html
@@ -1048,18 +1074,22 @@ with tab4:
     
     c_card1, c_card2 = st.columns(2)
     has_matchup = False
+    
     with c_card1:
-        if lad_spotlight_b and laa_spotlight_p:
+        if away_team == "LAD" and lad_spotlight_b and laa_spotlight_p:
             card_html = render_log5_card(lad_spotlight_b, 'LAD', laa_spotlight_p, 'LAA', '#005A9C')
-            if card_html:
-                st.markdown(card_html, unsafe_allow_html=True)
-                has_matchup = True
-    with c_card2:
-        if laa_spotlight_b and lad_spotlight_p:
+            if card_html: st.markdown(card_html, unsafe_allow_html=True); has_matchup = True
+        elif away_team == "LAA" and laa_spotlight_b and lad_spotlight_p:
             card_html = render_log5_card(laa_spotlight_b, 'LAA', lad_spotlight_p, 'LAD', '#BA0021')
-            if card_html:
-                st.markdown(card_html, unsafe_allow_html=True)
-                has_matchup = True
+            if card_html: st.markdown(card_html, unsafe_allow_html=True); has_matchup = True
+            
+    with c_card2:
+        if home_team == "LAA" and laa_spotlight_b and lad_spotlight_p:
+            card_html = render_log5_card(laa_spotlight_b, 'LAA', lad_spotlight_p, 'LAD', '#BA0021')
+            if card_html: st.markdown(card_html, unsafe_allow_html=True); has_matchup = True
+        elif home_team == "LAD" and lad_spotlight_b and laa_spotlight_p:
+            card_html = render_log5_card(lad_spotlight_b, 'LAD', laa_spotlight_p, 'LAA', '#005A9C')
+            if card_html: st.markdown(card_html, unsafe_allow_html=True); has_matchup = True
     
     if has_matchup: st.markdown("<br>", unsafe_allow_html=True)
 
@@ -1067,14 +1097,20 @@ with tab4:
 
     def auto_lineup_v48(team_name):
         s_prefix = "" if wr_season == "十年總成績" else f"[S{wr_season.split(' ')[1]}]"
-        s_df = df_b_raw[(df_b_raw['球隊'] == team_name) & (df_b_raw['賽事階段'].astype(str).str.contains(s_prefix, regex=False))]
+        stage_keyword = "世界大賽" if is_ws_mode else "例行賽"
+        s_df = df_b_raw[(df_b_raw['球隊'] == team_name) & 
+                        (df_b_raw['賽事階段'].astype(str).str.contains(s_prefix, regex=False)) &
+                        (df_b_raw['賽事階段'].astype(str).str.contains(stage_keyword, regex=False))]
         
         if s_df.empty:
             st.toast(f"⚠️ {team_name} 在本賽季尚無數據，無法代排。")
             return
 
         agg = s_df.groupby('球員姓名').agg({'打席': 'sum', '四壞球': 'sum', '安打': 'sum', '二壘安打': 'sum', '三壘安打': 'sum', '全壘打': 'sum'}).reset_index()
-        agg['wRC+'] = (( (0.69*agg['四壞球']+0.88*(agg['安打']-agg['二壘安打']-agg['三壘安打']-agg['全壘打'])+1.25*agg['二壘安打']+1.59*agg['三壘安打']+2.06*agg['全壘打'])/agg['打席'] ) / 0.320 * 100).fillna(0).astype(int)
+        
+        # ✨ 升級 1：貝氏平滑穩定機制 (加上 10 個打席的聯盟平均，避免 1 席 1 保送的球員 wRC+ 暴衝)
+        agg['woba_num'] = 0.69 * agg['四壞球'] + 0.88 * (agg['安打'] - agg['二壘安打'] - agg['三壘安打'] - agg['全壘打']) + 1.25 * agg['二壘安打'] + 1.59 * agg['三壘安打'] + 2.06 * agg['全壘打']
+        agg['wRC+'] = (((agg['woba_num'] + 0.320 * 10) / (agg['打席'] + 10)) / 0.320 * 100).astype(int)
         
         eligibility = s_df.groupby('球員姓名')['守位'].unique().to_dict()
         final_9_match = {} 
@@ -1094,102 +1130,81 @@ with tab4:
                     final_9_match[remaining_players.pop(0)] = pos
 
         best_9_names = list(final_9_match.keys())
-        best_9_stats = agg[agg['球員姓名'].isin(best_9_names)].sort_values('wRC+', ascending=False)
-        
+        best_9_df = agg[agg['球員姓名'].isin(best_9_names)].sort_values('wRC+', ascending=False).reset_index(drop=True)
         prefix_team = team_name.lower()
-        sorted_names = best_9_stats['球員姓名'].tolist()[:9]
-        sorted_pos = [final_9_match[name] for name in sorted_names]
         
-        for idx in range(9):
-            new_n = sorted_names[idx] if idx < len(sorted_names) else "未指定"
-            new_p = sorted_pos[idx] if idx < len(sorted_pos) else DEFAULT_9_POS[idx]
+        # ✨ 升級 2：現代棒球打序觀念對位 (2棒最強、4棒重砲、1棒高上壘)
+        modern_mapping = {1: 2, 2: 0, 3: 4, 4: 1, 5: 3, 6: 5, 7: 6, 8: 7, 9: 8}
+        
+        for order_idx in range(1, 10):
+            rank_idx = modern_mapping[order_idx]
+            if rank_idx < len(best_9_df):
+                new_n = best_9_df.iloc[rank_idx]['球員姓名']
+                new_p = final_9_match[new_n]
+            else:
+                new_n, new_p = "未指定", "DH"
             
-            st.session_state[f"{prefix_team}_b{idx+1}"] = new_n
-            st.session_state[f"{prefix_team}_pos{idx+1}"] = new_p
-            st.session_state.lineups[team_name][idx] = new_n
-            st.session_state.lineup_pos[team_name][idx] = new_p
-            
+            st.session_state[f"{prefix_team}_b{order_idx}"] = new_n
+            st.session_state[f"{prefix_team}_pos{order_idx}"] = new_p
+            st.session_state.lineups[team_name][order_idx-1] = new_n if new_n != "未指定" else ""
+            st.session_state.lineup_pos[team_name][order_idx-1] = new_p
+
+    # ✨ 修正 3：合併成單一按鈕，雙隊同步排線！
+    if st.button("🤖 AI 一鍵最佳化打線 (雙隊同步 / 現代棒球觀念)", type="primary", use_container_width=True, key="btn_ai_both_tab4"):
+        auto_lineup_v48("LAA")
+        auto_lineup_v48("LAD")
         if 'save_settings' in globals(): save_settings()
         st.rerun()
 
-    with col_ai1:
-        if st.button("🤖 AI 一鍵代排 LAA (守位連動)", use_container_width=True, key="btn_ai_laa_tab4_v48_final"): auto_lineup_v48("LAA")
-    with col_ai2:
-        if st.button("🤖 AI 一鍵代排 LAD (守位連動)", use_container_width=True, key="btn_ai_lad_tab4_v48_final"): auto_lineup_v48("LAD")
     st.markdown("---")
+
+        
+    # --- 5. 打線與投手選擇 UI ---
+    col_left_lineup, col_right_lineup = st.columns(2)
     
-    col_laa, col_lad = st.columns(2)
-    
-    with col_laa:
-        st.subheader("🔴 LAA 先發陣容")
-        available_laa = cached_players_b.get("LAA", []).copy()
+    def render_team_lineup_ui(team, location_tag):
+        st.subheader(f"{'🔴' if team == 'LAA' else '🔵'} {team} 先發陣容 ({location_tag})")
+        available_players = cached_players_b.get(team, []).copy()
+        prefix_str = "WS " if is_ws_mode else ""
+        team_lower = team.lower()
         
         for i in range(1, 10):
             c_name, c_pos = st.columns([2, 1])
-            b_key = f"laa_b{i}"
-            pos_key = f"laa_pos{i}"
+            b_key = f"{team_lower}_b{i}"
+            pos_key = f"{team_lower}_pos{i}"
             
             with c_name:
-                options_laa = ["未指定"] + available_laa 
-                p = st.selectbox(f"第 {i} 棒", options_laa, key=b_key, on_change=handle_lineup_change, args=("LAA", i-1))
+                options = ["未指定"] + available_players 
+                p = st.selectbox(f"第 {i} 棒", options, key=b_key, on_change=handle_lineup_change, args=(team, i-1))
             with c_pos:
-                pos = st.selectbox(f"守位", DEFAULT_9_POS, key=pos_key, label_visibility="hidden", on_change=handle_pos_change, args=("LAA", i-1))
+                pos = st.selectbox(f"守位", DEFAULT_9_POS, key=pos_key, label_visibility="hidden", on_change=handle_pos_change, args=(team, i-1))
             
             if p and p != "未指定":
-                stats = display_b_stats.get("LAA", {}).get(p, {'wRC+': 0, 'eWAR': 0, 'AVG': 0})
-                prefix_str = "WS " if is_ws_mode else ""
+                stats = display_b_stats.get(team, {}).get(p, {'wRC+': 0, 'eWAR': 0, 'AVG': 0})
                 st.caption(f"📊 {prefix_str}eWAR: **{stats['eWAR']:.1f}** | {prefix_str}wRC+: **{stats['wRC+']:.0f}** | {prefix_str}AVG: {stats['AVG']:.3f}")
-            
-        laa_sp_options = ["未指定"] + cached_players_p.get("LAA", [])
-        sp_key = "laa_sp_v48_final"
+        
+        # ✨ 修復點：特別加上分隔線，讓投手下拉選單絕對不迷路！
+        st.markdown("---")
+        st.markdown(f"##### ⚾ {team} 先發投手 (SP)")
+        sp_options = ["未指定"] + cached_players_p.get(team, [])
+        sp_key = f"{team_lower}_sp_v48_final"
         if sp_key not in st.session_state:
-            st.session_state[sp_key] = st.session_state.pitchers.get("LAA", "未指定")
-        if st.session_state[sp_key] not in laa_sp_options: st.session_state[sp_key] = "未指定"
+            st.session_state[sp_key] = st.session_state.pitchers.get(team, "未指定")
+        if st.session_state[sp_key] not in sp_options: st.session_state[sp_key] = "未指定"
         
-        laa_sp = st.selectbox("先發投手 (SP)", laa_sp_options, key=sp_key)
-        st.session_state.pitchers["LAA"] = laa_sp if laa_sp != "未指定" else ""
-        if laa_sp and laa_sp != "未指定":
-            stats = display_p_stats.get("LAA", {}).get(laa_sp, {'ERA': 0, 'eWAR': 0, 'K': 0})
-            prefix_str = "WS " if is_ws_mode else ""
-            era_str = '∞' if stats['ERA'] == float('inf') else f"{stats['ERA']:.2f}"
-            st.caption(f"🥎 {prefix_str}eWAR: **{stats['eWAR']:.1f}** | {prefix_str}ERA: **{era_str}** | {prefix_str}K: {stats['K']}")
-        
-    with col_lad:
-        st.subheader("🔵 LAD 先發陣容")
-        available_lad = cached_players_b.get("LAD", []).copy()
-        
-        for i in range(1, 10):
-            c_name, c_pos = st.columns([2, 1])
-            b_key = f"lad_b{i}"
-            pos_key = f"lad_pos{i}"
-            
-            with c_name:
-                options_lad = ["未指定"] + available_lad
-                p = st.selectbox(f"第 {i} 棒", options_lad, key=b_key, on_change=handle_lineup_change, args=("LAD", i-1))
-            with c_pos:
-                pos = st.selectbox(f"守位", DEFAULT_9_POS, key=pos_key, label_visibility="hidden", on_change=handle_pos_change, args=("LAD", i-1))
-            
-            if p and p != "未指定":
-                stats = display_b_stats.get("LAD", {}).get(p, {'wRC+': 0, 'eWAR': 0, 'AVG': 0})
-                prefix_str = "WS " if is_ws_mode else ""
-                st.caption(f"📊 {prefix_str}eWAR: **{stats['eWAR']:.1f}** | {prefix_str}wRC+: **{stats['wRC+']:.0f}** | {prefix_str}AVG: {stats['AVG']:.3f}")
-            
-        lad_sp_options = ["未指定"] + cached_players_p.get("LAD", [])
-        sp_key_lad = "lad_sp_v48_final"
-        if sp_key_lad not in st.session_state:
-            st.session_state[sp_key_lad] = st.session_state.pitchers.get("LAD", "未指定")
-        if st.session_state[sp_key_lad] not in lad_sp_options: st.session_state[sp_key_lad] = "未指定"
-        
-        lad_sp = st.selectbox("先發投手 (SP)", lad_sp_options, key=sp_key_lad)
-        st.session_state.pitchers["LAD"] = lad_sp if lad_sp != "未指定" else ""
-        if lad_sp and lad_sp != "未指定":
-            stats = display_p_stats.get("LAD", {}).get(lad_sp, {'ERA': 0, 'eWAR': 0, 'K': 0})
-            prefix_str = "WS " if is_ws_mode else ""
+        sp = st.selectbox(f"選擇 {team} 先發", sp_options, key=sp_key, label_visibility="collapsed")
+        st.session_state.pitchers[team] = sp if sp != "未指定" else ""
+        if sp and sp != "未指定":
+            stats = display_p_stats.get(team, {}).get(sp, {'ERA': 0, 'eWAR': 0, 'K': 0})
             era_str = '∞' if stats['ERA'] == float('inf') else f"{stats['ERA']:.2f}"
             st.caption(f"🥎 {prefix_str}eWAR: **{stats['eWAR']:.1f}** | {prefix_str}ERA: **{era_str}** | {prefix_str}K: {stats['K']}")
 
+    with col_left_lineup: render_team_lineup_ui(away_team, "客場")
+    with col_right_lineup: render_team_lineup_ui(home_team, "主場")
+
     st.markdown("---")
     
+    # --- 6. 賽前戰力天秤與 AI 戰報生成 ---
     st.subheader("🔮 賽前戰力天秤 (Expected Win %)")
     
     def get_streak_bonus(team_name, ws_only=False):
@@ -1250,31 +1265,64 @@ with tab4:
         
         curr_laa_batters = [st.session_state.lineups['LAA'][i] for i in range(9) if st.session_state.lineups['LAA'][i] != "未指定"]
         curr_lad_batters = [st.session_state.lineups['LAD'][i] for i in range(9) if st.session_state.lineups['LAD'][i] != "未指定"]
+        laa_sp = st.session_state.pitchers.get("LAA", "未指定")
+        lad_sp = st.session_state.pitchers.get("LAD", "未指定")
         
-        laa_power = sum([get_b_ewar('LAA', p) for p in curr_laa_batters]) + get_p_ewar('LAA', laa_sp) + get_streak_bonus('LAA', is_ws_mode)/3.0 - (3.0 if laa_sp and laa_sp != "未指定" and get_starter_ratio('LAA', laa_sp) <= 0.30 else 0)
-        lad_power = sum([get_b_ewar('LAD', p) for p in curr_lad_batters]) + get_p_ewar('LAD', lad_sp) + get_streak_bonus('LAD', is_ws_mode)/3.0 - (3.0 if lad_sp and lad_sp != "未指定" and get_starter_ratio('LAD', lad_sp) <= 0.30 else 0)
+        laa_power = sum([get_b_ewar('LAA', p) for p in curr_laa_batters]) + get_p_ewar('LAA', laa_sp) + get_streak_bonus('LAA', is_ws_mode)/3.0 - (3.0 if laa_sp != "未指定" and get_starter_ratio('LAA', laa_sp) <= 0.30 else 0)
+        lad_power = sum([get_b_ewar('LAD', p) for p in curr_lad_batters]) + get_p_ewar('LAD', lad_sp) + get_streak_bonus('LAD', is_ws_mode)/3.0 - (3.0 if lad_sp != "未指定" and get_starter_ratio('LAD', lad_sp) <= 0.30 else 0)
         
+        laa_power += 1.5 if is_laa_home else 0
+        lad_power += 1.5 if not is_laa_home else 0
+
         laa_prob = max(15.0, min(85.0, round((1 / (1 + math.exp(-0.12 * (laa_power - lad_power)))) * 100, 1)))
-        return laa_prob, round(100.0 - laa_prob, 1), laa_sp and laa_sp != "未指定" and get_starter_ratio('LAA', laa_sp) <= 0.30, lad_sp and lad_sp != "未指定" and get_starter_ratio('LAD', lad_sp) <= 0.30
+        return laa_prob, round(100.0 - laa_prob, 1), laa_sp != "未指定" and get_starter_ratio('LAA', laa_sp) <= 0.30, lad_sp != "未指定" and get_starter_ratio('LAD', lad_sp) <= 0.30
 
     prob_laa, prob_lad, is_laa_opener, is_lad_opener = calc_win_prob()
     ml_laa = f"-{int(round((prob_laa / (100.0 - prob_laa)) * 100))}" if prob_laa > 50 else f"+{int(round(((100.0 - prob_laa) / max(0.1, prob_laa)) * 100))}" if prob_laa < 50 else "PK"
     ml_lad = f"-{int(round((prob_lad / (100.0 - prob_lad)) * 100))}" if prob_lad > 50 else f"+{int(round(((100.0 - prob_lad) / max(0.1, prob_lad)) * 100))}" if prob_lad < 50 else "PK"
     
-    st.markdown(f"<div style='display: flex; height: 35px; border-radius: 8px; overflow: hidden; font-weight: bold; color: white; text-align: center; line-height: 35px; font-size: 16px; margin-bottom: 10px; box-shadow: 0 2px 5px rgba(0,0,0,0.2);'><div style='width: {prob_laa}%; background-color: #BA0021; transition: width 0.5s;'>LAA {prob_laa}% ({ml_laa})</div><div style='width: {prob_lad}%; background-color: #005A9C; transition: width 0.5s;'>LAD {prob_lad}% ({ml_lad})</div></div>", unsafe_allow_html=True)
+    if away_team == "LAD":
+        left_p, right_p, left_t, right_t, left_ml, right_ml, c_left, c_right = prob_lad, prob_laa, "LAD", "LAA", ml_lad, ml_laa, "#005A9C", "#BA0021"
+    else:
+        left_p, right_p, left_t, right_t, left_ml, right_ml, c_left, c_right = prob_laa, prob_lad, "LAA", "LAD", ml_laa, ml_lad, "#BA0021", "#005A9C"
+
+    st.markdown(f"<div style='display: flex; height: 35px; border-radius: 8px; overflow: hidden; font-weight: bold; color: white; text-align: center; line-height: 35px; font-size: 16px; margin-bottom: 10px; box-shadow: 0 2px 5px rgba(0,0,0,0.2);'><div style='width: {left_p}%; background-color: {c_left}; transition: width 0.5s;'>{left_t} {left_p}% ({left_ml})</div><div style='width: {right_p}%; background-color: {c_right}; transition: width 0.5s;'>{right_t} {right_p}% ({right_ml})</div></div>", unsafe_allow_html=True)
     
-    msg = "💡 **AI 魔球演算模型**：納入打線、先發(權重5倍)、與球隊連勝動能。"
+    msg = "💡 **AI 魔球演算模型**：納入打線火力、守位價值、先發(權重5倍)、球隊連勝動能與**主場優勢 (+1.5 eWAR)**。"
     if is_ws_mode: msg += " 🏆 **[世界大賽模式] 已強制套用季後賽手感加權！**"
-    if is_laa_opener or is_lad_opener: msg += " ⚠️ **偵測到牛棚假先發 (生涯先發比例過低)，勝率已大幅調降。**"
+    if is_laa_opener or is_lad_opener: msg += " ⚠️ **偵測到牛棚假先發 (生涯先發比例過低)，該隊勝率已遭系統大幅下修。**"
     st.caption(msg)
 
     st.markdown("---")
     
-    if st.button("🎙️ 產生賽前深度戰報 (含數據排名與推演)", type="primary", use_container_width=True, key="btn_report_tab4_v48_final"):
+    if st.button("🎙️ 產生賽前深度戰報 (含數據預測與球評講評)", type="primary", use_container_width=True, key="btn_report_tab4_v48_final"):
         if 'save_settings' in globals(): save_settings()
-        with st.spinner("AI 球評正在運算高階 Sabermetrics 數據與排名..."):
+        with st.spinner("AI 球評正在運算高階 Sabermetrics 數據與戰術推演..."):
             time.sleep(1.5)
             df_p_full = st.session_state.get('df_p_raw', pd.DataFrame())
+            
+            def get_league_era(p_stats_dict):
+                all_ip = sum([val['IP'] for t, plrs in p_stats_dict.items() for p, val in plrs.items()])
+                all_er = sum([val['ERA'] * val['IP'] for t, plrs in p_stats_dict.items() for p, val in plrs.items() if val['ERA'] != float('inf')])
+                return (all_er / all_ip) if all_ip > 0 else 4.50
+
+            current_lg_era = get_league_era(curr_p_stats)
+
+            st.markdown(f"## 📰 【{wr_season}】 賽前魔球戰報")
+            
+            base_b_stats = reg_b_stats if is_ws_mode else curr_b_stats
+            base_p_stats = reg_p_stats if is_ws_mode else curr_p_stats
+            all_b_ewar = {p: v['eWAR'] for t, plrs in base_b_stats.items() for p, v in plrs.items() if v.get('PA', 0) >= dyn_pa_limit}
+            all_p_ewar = {p: v['eWAR'] for t, plrs in base_p_stats.items() for p, v in plrs.items() if v.get('IP', 0) >= dyn_ip_limit}
+            mvp_top3 = sorted(all_b_ewar, key=all_b_ewar.get, reverse=True)[:3] if all_b_ewar else []
+            cy_top3 = sorted(all_p_ewar, key=all_p_ewar.get, reverse=True)[:3] if all_p_ewar else []
+
+            curr_laa_batters = [st.session_state.lineups['LAA'][i] for i in range(9) if st.session_state.lineups['LAA'][i] != "未指定"]
+            curr_lad_batters = [st.session_state.lineups['LAD'][i] for i in range(9) if st.session_state.lineups['LAD'][i] != "未指定"]
+            laa_sp = st.session_state.pitchers.get("LAA", "未指定")
+            lad_sp = st.session_state.pitchers.get("LAD", "未指定")
+
+            st.markdown("### 🏟️ 球隊近況與牛棚防線")
             
             def get_team_streak_str(team_name, ws_only=False):
                 if df_p_full.empty: return "尚無賽事"
@@ -1304,7 +1352,7 @@ with tab4:
                     else: break
                 return f"**{streak_count} 連勝** 🔥" if streak_type == 'W' else f"**{streak_count} 連敗** 🧊" if streak_type == 'L' else f"**{streak_count} 連和** 🤝"
 
-            def get_bullpen_era(team_name, ws_only=False):
+            def get_bullpen_era_val(team_name, ws_only=False):
                 if df_p_full.empty: return None
                 if ws_only and wr_season != "十年總成績":
                     s_num = wr_season.split(" ")[1]
@@ -1325,22 +1373,20 @@ with tab4:
                         bp_er += pd.to_numeric(bp_group['自責分'], errors='coerce').fillna(0).sum()
                 return (bp_er * 9) / (bp_outs / 3.0) if (bp_outs / 3.0) > 0 else 0.0
 
-            st.markdown(f"## 📰 【{wr_season}】 賽前魔球戰報")
-            
-            st.markdown("### 🏟️ 球隊近況與牛棚防線")
             def generate_team_momentum(team):
                 streak = get_team_streak_str(team, is_ws_mode)
-                bp_era = get_bullpen_era(team, is_ws_mode)
+                bp_era = get_bullpen_era_val(team, is_ws_mode)
                 text = f"**【{team} 戰力概況】**\n- **近期氣勢**：目前處於 {streak}。\n"
                 if bp_era is not None:
                     text += f"- **後援安定度**：牛棚 ERA 為 **{bp_era:.2f}**。"
-                    if bp_era > 5.50: text += " 🚨 **(放火警報)** 領先 3 分都不安全！\n\n"
-                    elif bp_era < 2.50: text += " 🔒 **(鐵壁防線)** 領先進入後半段幾乎等於比賽結束。\n\n"
+                    if bp_era > current_lg_era + 1.0: text += " 🚨 **(放火警報)** 領先 3 分都不安全！\n\n"
+                    elif bp_era < current_lg_era - 1.0: text += " 🔒 **(鐵壁防線)** 領先進入後半段幾乎等於比賽結束。\n\n"
                     else: text += " 調度時機將是關鍵。\n\n"
                 else: text += "- **牛棚安定度**：尚無數據。\n\n"
                 return text
-            st.info(generate_team_momentum("LAA") + generate_team_momentum("LAD"))
-
+                
+            st.info(generate_team_momentum(away_team) + generate_team_momentum(home_team))
+            
             st.markdown("### 🥎 投手丘上的進階剖析")
             def get_pitcher_insights(team, sp, stats_dict, prev_dict, reg_dict, ws_dict, is_ws_mode):
                 if not sp or sp == "未指定" or sp not in stats_dict.get(team, {}): return ""
@@ -1357,9 +1403,18 @@ with tab4:
                 all_eras = sorted(list(set(qualified_pitchers_eras)))
                 rank_str = f"聯盟第 {all_eras.index(era) + 1}" if s['IP'] >= dyn_ip_limit and era in all_eras else "未達局數門檻"
                 
-                p_era = prev_dict.get(team, {}).get(sp, {}).get('ERA', era)
-                era_str, p_era_str, fip_str = ("∞" if era == float('inf') else f"{era:.2f}", "∞" if p_era == float('inf') else f"{p_era:.2f}", "∞" if fip == float('inf') else f"{fip:.2f}")
-                trend = f"(去年 ERA {p_era_str})" if p_era != era else ""
+                era_str = "∞" if era == float('inf') else f"{era:.2f}"
+                fip_str = "∞" if fip == float('inf') else f"{fip:.2f}"
+                
+                # ✨ 修正：把去年 ERA 放回來，但加上「時空鎖」，確保 Season 1 絕對不會出現這個數值！
+                trend = ""
+                if wr_season != "十年總成績":
+                    curr_s = int(wr_season.split(" ")[1])
+                    if curr_s > 1:
+                        p_era = prev_dict.get(team, {}).get(sp, {}).get('ERA', None)
+                        if p_era is not None:
+                            p_era_str = "∞" if p_era == float('inf') else f"{p_era:.2f}"
+                            trend = f"(去年 ERA {p_era_str})"
                 
                 insight = f"**【{team} 先發】 {sp}**\n- **數據**：ERA **{era_str} ({rank_str})** {trend} | eWAR **{s['eWAR']:.1f}**\n"
                 insight += f"- **壓制與效率**：WHIP **{s['WHIP']:.2f}** | K/9 **{s['K/9']:.2f}** | 每局用球 (P/IP) **{s['P/IP']:.1f}** 球\n"
@@ -1371,27 +1426,29 @@ with tab4:
                     ws_era = ws_dict[team][sp]['ERA']
                     reg_era = reg_dict.get(team, {}).get(sp, {}).get('ERA', 0)
                     ws_era_str, reg_era_str = "∞" if ws_era == float('inf') else f"{ws_era:.2f}", "∞" if reg_era == float('inf') else f"{reg_era:.2f}"
-                    
                     if ws_era < 2.5 and reg_era > 4.0: insight += f"- 🌟 **季後賽賽揚 ({sp})**：例行賽防禦率高達 {reg_era_str}，一進世界大賽直接鬼神化 ({ws_era_str})！\n\n"
                     elif ws_era > 5.5 and reg_era < 3.5: insight += f"- 🥶 **大賽軟手症 ({sp})**：例行賽神級表現，到了世界大賽完全失常 (ERA {ws_era_str})！\n\n"
                     elif ws_era <= 3.0 and reg_era <= 3.0: insight += f"- 👑 **大場面王牌 ({sp})**：無論例行賽或世界大賽 (WS ERA {ws_era_str})，壓制力始終如一。\n\n"
                     return insight 
                 
                 fip_diff = fip - era
-                if era >= 6.0 and fip >= 6.0: insight += f"- 🚨 **發球機警報 (狀況慘烈)**：防禦率 ({era_str}) 還是 FIP ({fip_str}) 都突破天際，今晚隨時會被打退場。\n\n"
-                elif era <= 2.5 and fip <= 2.5: insight += f"- 👑 **鬼神級王牌 (真材實料)**：進階數據 FIP 更是只有 {fip_str}！今晚對手只能自求多福。\n\n"
+                if era >= current_lg_era + 1.5 and fip >= current_lg_era + 1.5: insight += f"- 🚨 **發球機警報 (狀況慘烈)**：防禦率 ({era_str}) 還是 FIP ({fip_str}) 都突破天際，今晚隨時會被打退場。\n\n"
+                elif era <= current_lg_era - 1.5 and fip <= current_lg_era - 1.5: insight += f"- 👑 **鬼神級王牌 (真材實料)**：進階數據 FIP 更是只有 {fip_str}！今晚對手只能自求多福。\n\n"
                 elif fip_diff < -0.5:
-                    if era > 3.5: insight += random.choice([f"- 💡 **悲情王牌 (被守備雷到)**：帳面 ERA 看似平凡，但 FIP 僅 {fip_str}！失分多半是非戰之罪。\n\n", f"- 📉 **進階數據平反**：別被 {era_str} 的防禦率騙了，FIP 只有 {fip_str}，投球內容相當優異。\n\n"])
+                    if era > current_lg_era: insight += random.choice([f"- 💡 **悲情王牌 (被守備雷到)**：帳面 ERA 看似平凡，但 FIP 僅 {fip_str}！失分多半是非戰之罪。\n\n", f"- 📉 **進階數據平反**：別被 {era_str} 的防禦率騙了，FIP 只有 {fip_str}，投球內容相當優異。\n\n"])
                     else: insight += f"- 🛡️ **深不見底的壓制力**：防禦率 {era_str}，FIP ({fip_str}) 還能更低！把命運完全掌握在自己手中。\n\n"
                 elif fip_diff > 0.5:
-                    if era < 3.5: insight += random.choice([f"- 🚨 **強運校正警報**：防禦率 {era_str} 看似無懈可擊，但 FIP 高達 {fip_str}。靠完美的守備與運氣撐，有核爆風險。\n\n", f"- ⚠️ **虛假繁榮**：ERA 只有 {era_str}，但進階數據 FIP 殘酷地指出他的真實壓制力並不理想。\n\n"])
+                    if era < current_lg_era: insight += random.choice([f"- 🚨 **強運校正警報**：防禦率 {era_str} 看似無懈可擊，但 FIP 高達 {fip_str}。靠完美的守備與運氣撐，有核爆風險。\n\n", f"- ⚠️ **虛假繁榮**：ERA 只有 {era_str}，但進階數據 FIP 殘酷地指出他的真實壓制力並不理想。\n\n"])
                     else: insight += f"- 💣 **雪上加霜**：防禦率已經不理想，FIP ({fip_str}) 更是慘烈。過度依賴守備，狀況堪憂。\n\n"
                 else: insight += f"- ⚖️ **真金不怕火煉**：FIP ({fip_str}) 與 ERA 極為吻合，帳面成績就是真實硬實力。\n\n"
                 return insight
                 
             p_rep = ""
-            if laa_sp != "未指定": p_rep += get_pitcher_insights("LAA", laa_sp, curr_p_stats, prev_p_stats, reg_p_stats, ws_p_stats, is_ws_mode)
-            if lad_sp != "未指定": p_rep += get_pitcher_insights("LAD", lad_sp, curr_p_stats, prev_p_stats, reg_p_stats, ws_p_stats, is_ws_mode)
+            if away_team == "LAA" and laa_sp != "未指定": p_rep += get_pitcher_insights("LAA", laa_sp, curr_p_stats, prev_p_stats, reg_p_stats, ws_p_stats, is_ws_mode)
+            elif away_team == "LAD" and lad_sp != "未指定": p_rep += get_pitcher_insights("LAD", lad_sp, curr_p_stats, prev_p_stats, reg_p_stats, ws_p_stats, is_ws_mode)
+            
+            if home_team == "LAA" and laa_sp != "未指定": p_rep += get_pitcher_insights("LAA", laa_sp, curr_p_stats, prev_p_stats, reg_p_stats, ws_p_stats, is_ws_mode)
+            elif home_team == "LAD" and lad_sp != "未指定": p_rep += get_pitcher_insights("LAD", lad_sp, curr_p_stats, prev_p_stats, reg_p_stats, ws_p_stats, is_ws_mode)
             if p_rep: st.success(p_rep)
 
             st.markdown("### 💥 打線雷達掃描與教練點評")
@@ -1498,49 +1555,127 @@ with tab4:
                 if len(insights) == 1: insights.append("- ℹ️ 目前樣本數較少，戰術雷達尚未偵測到極端表現。")
                 return "\n".join(insights) + "\n\n"
                 
-            curr_laa_batters = [st.session_state.lineups['LAA'][i] for i in range(9) if st.session_state.lineups['LAA'][i] != "未指定"]
-            curr_lad_batters = [st.session_state.lineups['LAD'][i] for i in range(9) if st.session_state.lineups['LAD'][i] != "未指定"]
-            
             b_rep = ""
-            if curr_laa_batters: b_rep += get_lineup_insights("LAA", curr_laa_batters, display_b_stats, reg_b_stats, ws_b_stats, is_ws_mode)
-            if curr_lad_batters: b_rep += get_lineup_insights("LAD", curr_lad_batters, display_b_stats, reg_b_stats, ws_b_stats, is_ws_mode)
+            if away_team == "LAA" and curr_laa_batters: b_rep += get_lineup_insights("LAA", curr_laa_batters, display_b_stats, reg_b_stats, ws_b_stats, is_ws_mode)
+            elif away_team == "LAD" and curr_lad_batters: b_rep += get_lineup_insights("LAD", curr_lad_batters, display_b_stats, reg_b_stats, ws_b_stats, is_ws_mode)
+            
+            if home_team == "LAA" and curr_laa_batters: b_rep += get_lineup_insights("LAA", curr_laa_batters, display_b_stats, reg_b_stats, ws_b_stats, is_ws_mode)
+            elif home_team == "LAD" and curr_lad_batters: b_rep += get_lineup_insights("LAD", curr_lad_batters, display_b_stats, reg_b_stats, ws_b_stats, is_ws_mode)
+
             if b_rep: st.warning(b_rep)
 
-            st.markdown("### 🧠 數據總結推演")
+            st.markdown("### 🧠 賽前戰況總結 (轉播台視角)")
             tactics = []
-            bp_laa = get_bullpen_era("LAA", is_ws_mode) or 0.0
-            bp_lad = get_bullpen_era("LAD", is_ws_mode) or 0.0
+            bp_laa = get_bullpen_era_val("LAA", is_ws_mode) or 0.0
+            bp_lad = get_bullpen_era_val("LAD", is_ws_mode) or 0.0
             
             if is_ws_mode:
-                tactics.append("🏆 **【十月瘋狂】** 這是世界大賽！例行賽的戰績已經清零，現在比拚的是誰的大心臟能頂住壓力！")
-                laa_ws_op = sum([ws_b_stats.get('LAA', {}).get(p, {'wRC+':0})['wRC+'] for p in curr_laa_batters])
-                lad_ws_op = sum([ws_b_stats.get('LAD', {}).get(p, {'wRC+':0})['wRC+'] for p in curr_lad_batters])
-                laa_reg_op = sum([reg_b_stats.get('LAA', {}).get(p, {'wRC+':0})['wRC+'] for p in curr_laa_batters])
-                lad_reg_op = sum([reg_b_stats.get('LAD', {}).get(p, {'wRC+':0})['wRC+'] for p in curr_lad_batters])
-                
-                if laa_ws_op > lad_ws_op and laa_reg_op < lad_reg_op: tactics.append("🔥 **【季後賽大覺醒】** LAA 雖然例行賽跌跌撞撞，但進入世界大賽後打線全面甦醒，目前的季後賽火力完全壓過 LAD，絕對是極大的威脅！")
-                elif lad_ws_op > laa_ws_op and lad_reg_op < laa_reg_op: tactics.append("🔥 **【季後賽大覺醒】** LAD 雖然例行賽打線不如對手耀眼，但來到十月戰場卻展現出無比的韌性與爆發力，LAA 稍有不慎就會翻船！")
+                laa_ws_wins, lad_ws_wins = 0, 0
+                if not df_p_full.empty:
+                    ws_df = df_p_full[(df_p_full['賽事階段'].astype(str).str.contains(f"[S{wr_season.split(' ')[1]}] 世界大賽", regex=False))]
+                    for stage, group in ws_df.groupby('賽事階段', sort=False):
+                        if any('勝' in str(x) for x in group[group['球隊']=='LAA']['勝敗'].values): laa_ws_wins += 1
+                        if any('勝' in str(x) for x in group[group['球隊']=='LAD']['勝敗'].values): lad_ws_wins += 1
+
+                if laa_ws_wins == 3 and lad_ws_wins == 3: tactics.append("🔥 **【Game 7 生死戰】** 「各位觀眾，歡迎來到世界大賽 Game 7！贏家通吃，輸家回家！今天沒有保留體力的空間，連王牌先發隨時都會從牛棚走出來，這將是載入史冊的一役！」")
+                elif laa_ws_wins == 3: tactics.append(f"🏆 **【聽牌之戰】** 「LAA 目前以 {laa_ws_wins}:{lad_ws_wins} 取得絕對聽牌優勢！LAD 已經被逼到了懸崖邊緣，今晚必定精銳盡出，試圖在{'主場' if home_team=='LAD' else '客場'}延長戰線！」")
+                elif lad_ws_wins == 3: tactics.append(f"🏆 **【聽牌之戰】** 「LAD 帶著 {lad_ws_wins}:{laa_ws_wins} 的優勢來到今晚！LAA 退無可退，這場背水一戰絕對會是火花四濺、傾盡所有！」")
+                elif laa_ws_wins == lad_ws_wins and laa_ws_wins > 0: tactics.append(f"⚔️ **【天王山之戰】** 「雙方目前戰成 {laa_ws_wins}:{lad_ws_wins} 平手！在短期賽制中，拿下這場『天王山之戰』的球隊，將獲得無比巨大的心理與調度優勢！」")
+                elif laa_ws_wins == 0 and lad_ws_wins == 0: tactics.append("🎆 **【秋季經典首戰】** 「世界大賽 Game 1 正式點燃戰火！雙方都在試探彼此的底牌，今天誰能搶下開門紅，就能初步掌控系列賽的節奏。」")
+                else:
+                    lead_team = "LAA" if laa_ws_wins > lad_ws_wins else "LAD"
+                    trail_team = "LAD" if laa_ws_wins > lad_ws_wins else "LAA"
+                    tactics.append(f"📈 **【系列賽走勢】** 「目前 {lead_team} 取得領先，但 {trail_team} 的反撲力道絕對不容小覷，今天的比賽將決定系列賽會是一面倒還是陷入泥淖。」")
+            else:
+                tactics.append(random.choice([
+                    "🎙️ **【例行賽焦點】** 「漫長的賽季中，每一場勝利都是通往十月的基石，且看今天雙方能為球迷帶來什麼樣的高水準交鋒。」",
+                    "🎙️ **【例行賽焦點】** 「例行賽就是一場馬拉松，但今天這場洛杉磯內戰，雙方絕對都想在氣勢上壓過對手！」"
+                ]))
+
+            x_factors = []
             
-            if prob_laa > 65:
-                if bp_lad > 4.5: tactics.append("數據顯示 LAA 擁有壓倒性優勢，且對手牛棚防線脆弱，LAA 有望在比賽後半段進一步擴大領先。")
-                elif bp_laa > 4.5: tactics.append("LAA 雖然先發與打線佔優，但自家牛棚是一大隱憂。對手若能將戰局逼入後半段，隨時有逆轉可能。")
-                else: tactics.append("數據顯示 LAA 擁有極大優勢，投打戰力完整，對手今晚將面臨極大考驗。")
-            elif prob_lad > 65:
-                if bp_laa > 4.5: tactics.append("LAD 在戰力天秤上占據制高點，且對手牛棚防線脆弱，LAD 有望在比賽後半段定調戰局。")
-                elif bp_lad > 4.5: tactics.append("LAD 雖然先發與打線佔優，但自家牛棚是一大隱憂。對手若能將戰局逼入後半段，隨時有逆轉可能。")
-                else: tactics.append("數據顯示 LAD 擁有極大優勢，投打戰力完整，對手今晚將面臨極大考驗。")
+            if is_ws_mode:
+                for team, batters in [('LAA', curr_laa_batters), ('LAD', curr_lad_batters)]:
+                    for b in batters:
+                        if b in mvp_top3:
+                            ws_wrc = ws_b_stats.get(team, {}).get(b, {}).get('wRC+', 0)
+                            if ws_wrc < 80 and ws_b_stats.get(team, {}).get(b, {}).get('PA', 0) >= 3:
+                                x_factors.append(f"🥶 **【X-Factor：MVP 迷失十月】** 例行賽 MVP 大熱門 **{b}** 到了世界大賽竟然嚴重當機 (WS wRC+ 僅 {ws_wrc:.0f})。今晚他能否找回 MVP 級的身手，將是 {team} 死裡逃生的關鍵！")
+                            elif ws_wrc > 150:
+                                x_factors.append(f"👑 **【X-Factor：MVP 降臨】** 例行賽 MVP 級別的 **{b}** 到了十月大場面一樣毫不手軟 (WS wRC+ 高達 {ws_wrc:.0f})，對手今晚的投手群絕對要拉起最高層級的防空警報！")
                 
-            if bp_laa > 5.5 and bp_lad > 5.5: tactics.append("今晚兩隊牛棚都有『放火』基因，這場比賽在第七局之後才是真正的開始，心臟不好的觀眾請準備好藥品。")
-                
-            if laa_sp != "未指定" and lad_sp != "未指定":
-                sp1 = ws_p_stats if is_ws_mode else curr_p_stats
-                if sp1.get('LAA', {}).get(laa_sp,{'ERA':5.0})['ERA'] < 3.0 and sp1.get('LAD', {}).get(lad_sp,{'ERA':5.0})['ERA'] < 3.0:
-                    tactics.append("罕見的王牌大賽！得分可能像擠牙膏一樣困難，一分定勝負的機率極高。")
+                for team, sp in [('LAA', laa_sp), ('LAD', lad_sp)]:
+                    if sp != "未指定" and sp in cy_top3:
+                        ws_era = ws_p_stats.get(team, {}).get(sp, {}).get('ERA', 0.0)
+                        ws_fip = ws_p_stats.get(team, {}).get(sp, {}).get('FIP', 0.0)
+                        if ws_p_stats.get(team, {}).get(sp, {}).get('IP', 0) > 1.0:
+                            if ws_era > current_lg_era + 1.0 and ws_fip < current_lg_era - 0.5:
+                                x_factors.append(f"💡 **【X-Factor：賽揚悲情王牌】** 賽揚熱門 **{sp}** 在季後賽帳面 ERA ({ws_era:.2f}) 被打爆，但進階的 FIP ({ws_fip:.2f}) 證明他其實非常倒楣。今晚只要守備幫忙，他絕對會投出一場史詩級的好球平反！")
+                            elif ws_era > current_lg_era + 1.5:
+                                x_factors.append(f"🥀 **【X-Factor：王牌軟手】** 誰能想到例行賽神擋殺神的賽揚級王牌 **{sp}**，在世界大賽居然頂不住壓力 (ERA 高達 {ws_era:.2f})。今晚他必須克服心魔，否則球隊凶多吉少！")
+
+            for team, batters in [('LAA', curr_laa_batters), ('LAD', curr_lad_batters)]:
+                for b in batters:
+                    if b in curr_b_stats.get(team, {}):
+                        s = curr_b_stats[team][b]
+                        if s['PA'] >= dyn_pa_limit and s['wRC+'] > 180:
+                            x_factors.append(f"🔥 **【X-Factor：無法阻擋的 {b}】** 他近期的火力指標 wRC+ 高達 {s['wRC+']:.0f}，完全是外星人等級。對手今晚如果壘上有人，非常有可能選擇直接敬遠保送他！")
+                            
+            def get_x_stats_simple(b_name, b_team, p_name, p_team):
+                b_s = curr_b_stats.get(b_team, {}).get(b_name)
+                p_s = curr_p_stats.get(p_team, {}).get(p_name)
+                if not b_s or not p_s or b_s.get('PA',0) < 1 or p_s.get('BF',0) < 1: return 0,0,0
+                lg_pa = sum([v.get('PA',0) for t, plrs in curr_b_stats.items() for p, v in plrs.items()])
+                lg_ab = sum([v.get('AB',0) for t, plrs in curr_b_stats.items() for p, v in plrs.items()])
+                if lg_pa < 10 or lg_ab == 0: return 0,0,0
+                l_ba = sum([v.get('H',0) for t, plrs in curr_b_stats.items() for p, v in plrs.items()]) / lg_ab
+                l_obp = sum([v.get('H',0)+v.get('BB',0) for t, plrs in curr_b_stats.items() for p, v in plrs.items()]) / lg_pa
+                l_hr = sum([v.get('HR',0) for t, plrs in curr_b_stats.items() for p, v in plrs.items()]) / lg_pa
+                W = 10.0
+                b_ba = (b_s['H'] + l_ba * W) / (max(1, b_s['AB']) + W)
+                p_ba = (p_s['H'] + l_ba * W) / (max(1, p_s['BF']-p_s.get('BB',0)) + W)
+                b_obp = (b_s['H'] + b_s['BB'] + l_obp * W) / (b_s['PA'] + W)
+                p_obp = (p_s['H'] + p_s['BB'] + l_obp * W) / (p_s['BF'] + W)
+                b_hr = (b_s['HR'] + l_hr * W) / (b_s['PA'] + W)
+                p_hr = (p_s['HR'] + l_hr * W) / (p_s['BF'] + W)
+                return log5(b_ba, p_ba, l_ba), log5(b_obp, p_obp, l_obp), log5(b_hr, p_hr, l_hr)
+
+            if laa_sp != "未指定" and curr_lad_batters:
+                for b in random.sample(curr_lad_batters, min(3, len(curr_lad_batters))):
+                    xBA, xOBP, xHR = get_x_stats_simple(b, 'LAD', laa_sp, 'LAA')
+                    if xHR > 0.08: x_factors.append(f"💣 **【X-Factor：全壘打預警】** 模型推測 LAD 的 **{b}** 今晚面對 {laa_sp}，開轟的機率 (xHR%) 高達 **{xHR*100:.1f}%**！這個對決只要一失投就是一發大號全壘打。")
+                    elif xOBP > 0.45: x_factors.append(f"🦅 **【X-Factor：上壘機器】** LAD 的 **{b}** 遇到 {laa_sp} 預期上壘率 (xOBP) 突破 **{xOBP*100:.1f}%**！他將會是今晚不斷製造對手麻煩的攻勢發動機。")
                     
-            if not tactics: tactics.append("雙方戰力極其接近，預期勝率幾乎是五五開，守備的細節將決定最後的贏家。")
-            tactics.append(f"目前的預測氣氛：{'熱血沸騰' if abs(prob_laa-50) < 10 else '一面倒的屠殺？'}。")
-            
-            st.error(f"🎙️ **AI 魔球推演：** {random.choice(tactics)}")
+            if lad_sp != "未指定" and curr_laa_batters:
+                for b in random.sample(curr_laa_batters, min(3, len(curr_laa_batters))):
+                    xBA, xOBP, xHR = get_x_stats_simple(b, 'LAA', lad_sp, 'LAD')
+                    if xBA > 0.35: x_factors.append(f"🎯 **【X-Factor：安打製造機】** 根據 Log5 運算，LAA 的 **{b}** 打 {lad_sp} 預期會非常順手 (xBA 高達 **{xBA*100:.1f}%**)，他極有可能成為今晚撕裂對手防線的關鍵！")
+                    elif xHR > 0.08: x_factors.append(f"💣 **【X-Factor：重砲威脅】** 模型警告，LAA 的 **{b}** 面對 {lad_sp} 擊出全壘打的機率極高 (xHR% **{xHR*100:.1f}%**)！投手在面對他時配球必須非常謹慎。")
+
+            if bp_laa > current_lg_era + 1.0 and bp_lad > current_lg_era + 1.0:
+                x_factors.append(f"🧨 **【X-Factor：打者聯盟的牛棚地雷陣】** 在這個打者極度佔優的聯盟裡，兩隊後援 ERA (均突破 {max(bp_laa, bp_lad):.2f}) 都處於核爆邊緣。先發投手退場後的那一刻，才是這場比賽真正血流成河的起點！")
+            elif bp_laa > 0 and bp_laa < current_lg_era - 1.0 and bp_lad > 0 and bp_lad < current_lg_era - 1.0:
+                x_factors.append("🔒 **【X-Factor：逆流而上的鐵壁】** 在這個打者橫行的聯盟中，雙方居然都握有低於均值極多的超強牛棚！今晚誰能在前六局先取得領先，幾乎就等於把勝利放進了口袋。")
+
+            if x_factors: tactics.append(random.choice(x_factors))
+            else: tactics.append("🧩 **【X-Factor：總教練的魔法】** 雙方今晚的戰力極度緊繃，勝負的關鍵將完全落在兩邊總教練的戰術推進與換投時機拿捏。")
+
+            prediction = []
+            if is_laa_home: home_str = "主場球迷的加持"
+            else: home_str = "身處客場卻握有極佳的數據優勢"
+
+            if prob_laa > 62:
+                prediction.append(f"🔮 **【球評最終不負責任預測】** 「綜合戰力模型與 {home_str}，勝率天平嚴重向 LAA 傾斜 (**{prob_laa}%**)。只要先發投手不自爆，我個人大膽預測 **LAA** 會以 3 分以上的差距順利收下勝利！」")
+            elif prob_lad > 62:
+                home_str_lad = "在自家主場以逸待勞" if not is_laa_home else "客場作戰依舊數據碾壓"
+                prediction.append(f"🔮 **【球評最終不負責任預測】** 「各項高階數據與 {home_str_lad} 都顯示，LAD 今晚佔據了壓倒性的優勢 (**{prob_lad}%**)。除非棒球之神開玩笑，否則我強力推薦 **LAD** 會帶走今晚的勝利。」")
+            else:
+                favored_team = "LAA" if prob_laa >= 50 else "LAD"
+                favored_prob = prob_laa if prob_laa >= 50 else prob_lad
+                prediction.append(f"🔮 **【球評最終不負責任預測】** 「這絕對是一場血脈賁張的五五波絞肉機！雖然數據上 {favored_team} 稍微佔優 (**{favored_prob}%**)，但我認為這場比賽會糾纏到最後一局。我大膽預測 **{favored_team}** 會以一分之差險勝，球迷們準備好心臟藥丸吧！」")
+
+            tactics.append(prediction[0])
+            st.error("\n\n".join(tactics))
 # ==========================================
 # --- 分頁 5：🎖️ 聯盟大獎預測 ---
 # ==========================================

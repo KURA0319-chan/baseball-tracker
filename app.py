@@ -1299,6 +1299,291 @@ with tab4:
     st.caption(msg)
 
     st.markdown("---")
+    st.subheader("📈 FanGraphs 魔球長期走勢與預期勝率分析 (Monte Carlo & Pyth%)")
+    import altair as alt
+
+    def get_team_pyth_stats(team, season_prefix):
+        df_b = st.session_state.get('df_b_raw', pd.DataFrame())
+        df_p = st.session_state.get('df_p_raw', pd.DataFrame())
+        if df_b.empty and df_p.empty: return 0, 0, 0
+        
+        t_b = df_b[(df_b['球隊']==team) & df_b['賽事階段'].astype(str).str.contains(season_prefix, regex=False)] if season_prefix else df_b[df_b['球隊']==team]
+        t_p = df_p[(df_p['球隊']==team) & df_p['賽事階段'].astype(str).str.contains(season_prefix, regex=False)] if season_prefix else df_p[df_p['球隊']==team]
+        
+        rs = pd.to_numeric(t_b['得分'], errors='coerce').sum() if not t_b.empty else 0
+        ra = pd.to_numeric(t_p['失分'], errors='coerce').sum() if not t_p.empty else 0
+        games = t_p['賽事階段'].nunique() if not t_p.empty else 0
+        return rs, ra, games
+
+    curr_s_str = wr_season.split(" ")[1] if wr_season != "十年總成績" else ""
+    curr_prefix = f"[S{curr_s_str}]" if curr_s_str else ""
+    
+    laa_rs_c, laa_ra_c, laa_g_c = get_team_pyth_stats("LAA", curr_prefix)
+    lad_rs_c, lad_ra_c, lad_g_c = get_team_pyth_stats("LAD", curr_prefix)
+    
+    def calc_pyth(rs, ra):
+        if rs + ra == 0: return 0.5
+        return (rs**1.83) / (rs**1.83 + ra**1.83)
+
+    pyth_laa_curr = calc_pyth(laa_rs_c, laa_ra_c)
+    pyth_lad_curr = calc_pyth(lad_rs_c, lad_ra_c)
+
+    if laa_g_c < 5 and curr_s_str and int(curr_s_str) > 1:
+        prev_prefix = f"[S{int(curr_s_str)-1}]"
+        laa_rs_p, laa_ra_p, _ = get_team_pyth_stats("LAA", prev_prefix)
+        lad_rs_p, lad_ra_p, _ = get_team_pyth_stats("LAD", prev_prefix)
+        pyth_laa_prev = calc_pyth(laa_rs_p, laa_ra_p)
+        
+        weight = laa_g_c / 5.0
+        true_prob_laa = pyth_laa_curr * weight + pyth_laa_prev * (1 - weight)
+    else:
+        true_prob_laa = pyth_laa_curr
+
+    def calc_true_game_prob(laa_home):
+        p = true_prob_laa + (0.04 if laa_home else -0.04)
+        return max(0.05, min(0.95, p))
+
+    df_p_full = st.session_state.get('df_p_raw', pd.DataFrame())
+    df_b_full = st.session_state.get('df_b_raw', pd.DataFrame())
+
+    def get_game_score_str(stage_name):
+        if df_b_full.empty: return "無比分"
+        b_sub = df_b_full[df_b_full['賽事階段'] == stage_name]
+        r_laa = pd.to_numeric(b_sub[b_sub['球隊']=='LAA']['得分'], errors='coerce').sum() if not b_sub.empty else 0
+        r_lad = pd.to_numeric(b_sub[b_sub['球隊']=='LAD']['得分'], errors='coerce').sum() if not b_sub.empty else 0
+        return f"{int(r_laa)} : {int(r_lad)}"
+
+    g_order = [f"G{i}" for i in range(12)]
+
+    if is_ws_mode:
+        # ==========================================
+        # 🏆 模式 A：世界大賽動態奪冠機率圖 (2-3-2 賽制)
+        # ==========================================
+        actual_ws_winners = []
+        actual_ws_stages = []
+        if not df_p_full.empty:
+            ws_df_temp = df_p_full[df_p_full['賽事階段'].astype(str).str.contains(f"{curr_prefix} 世界大賽", regex=False)]
+            for stage, group in ws_df_temp.groupby('賽事階段', sort=False):
+                g_sorted = group.sort_values('時間戳記')
+                if any('勝' in str(x) for x in g_sorted[g_sorted['球隊']=='LAA']['勝敗'].values): actual_ws_winners.append("LAA")
+                elif any('勝' in str(x) for x in g_sorted[g_sorted['球隊']=='LAD']['勝敗'].values): actual_ws_winners.append("LAD")
+                actual_ws_stages.append(stage)
+
+        laa_ws_wins_temp = actual_ws_winners.count("LAA")
+        lad_ws_wins_temp = actual_ws_winners.count("LAD")
+
+        st.markdown(f"##### 實時戰況系列賽比分：🔴 LAA **{laa_ws_wins_temp}** : **{lad_ws_wins_temp}** 🔵 LAD")
+        
+        ws_hfa_team = "LAA"
+        if wr_season != "十年總成績":
+            current_rs_prefix = f"{curr_prefix} 例行賽"
+            laa_rs_wins, lad_rs_wins = 0, 0
+            laa_rs_r, laa_rs_ra, lad_rs_r, lad_rs_ra = 0, 0, 0, 0
+            
+            if not df_p_full.empty:
+                t_p_rs = df_p_full[df_p_full['賽事階段'].astype(str).str.contains(current_rs_prefix, regex=False)]
+                for stage, group in t_p_rs.groupby('賽事階段', sort=False):
+                    if any('勝' in str(x) for x in group[group['球隊']=='LAA']['勝敗'].values): laa_rs_wins += 1
+                    if any('勝' in str(x) for x in group[group['球隊']=='LAD']['勝敗'].values): lad_rs_wins += 1
+                laa_rs_ra = pd.to_numeric(t_p_rs[t_p_rs['球隊']=='LAA']['失分'], errors='coerce').sum()
+                lad_rs_ra = pd.to_numeric(t_p_rs[t_p_rs['球隊']=='LAD']['失分'], errors='coerce').sum()
+                
+            if not df_b_full.empty:
+                t_b_rs = df_b_full[df_b_full['賽事階段'].astype(str).str.contains(current_rs_prefix, regex=False)]
+                laa_rs_r = pd.to_numeric(t_b_rs[t_b_rs['球隊']=='LAA']['得分'], errors='coerce').sum()
+                lad_rs_r = pd.to_numeric(t_b_rs[t_b_rs['球隊']=='LAD']['得分'], errors='coerce').sum()
+                
+            if laa_rs_wins > lad_rs_wins: ws_hfa_team = "LAA"
+            elif lad_rs_wins > laa_rs_wins: ws_hfa_team = "LAD"
+            else: ws_hfa_team = "LAA" if (laa_rs_r - laa_rs_ra) >= (lad_rs_r - lad_rs_ra) else "LAD"
+
+        seed_string = f"WS_{wr_season}_{laa_ws_wins_temp}_{lad_ws_wins_temp}"
+        random.seed(sum(ord(c) for c in seed_string) % 999999)
+
+        def is_laa_home_in_ws(g_num, hfa):
+            return (g_num in [1, 2, 6, 7]) if hfa == "LAA" else not (g_num in [1, 2, 6, 7])
+
+        def get_ws_odds_at(w_l, w_d):
+            if w_l >= 4: return 1.0, 0.0
+            if w_d >= 4: return 0.0, 1.0
+            s_l, s_d = 0, 0
+            for _ in range(3000):
+                c_l, c_d = w_l, w_d
+                g = w_l + w_d
+                while c_l < 4 and c_d < 4:
+                    g += 1
+                    if random.random() < calc_true_game_prob(is_laa_home_in_ws(g, ws_hfa_team)): c_l += 1
+                    else: c_d += 1
+                if c_l == 4: s_l += 1
+                else: s_d += 1
+            return s_l/3000.0, s_d/3000.0
+
+        chart_data = []
+        cur_l, cur_d = 0, 0
+        p_l, p_d = get_ws_odds_at(0, 0)
+        chart_data.append({"Game": "G0", "Team": "LAA", "Prob": p_l, "Type": "實績", "Score": "系列賽開打"})
+        chart_data.append({"Game": "G0", "Team": "LAD", "Prob": p_d, "Type": "實績", "Score": "系列賽開打"})
+
+        for idx, winner in enumerate(actual_ws_winners):
+            g_num = idx + 1
+            if winner == "LAA": cur_l += 1
+            else: cur_d += 1
+            p_l, p_d = get_ws_odds_at(cur_l, cur_d)
+            s_str = get_game_score_str(actual_ws_stages[idx])
+            chart_data.append({"Game": f"G{g_num}", "Team": "LAA", "Prob": p_l, "Type": "實績", "Score": s_str})
+            chart_data.append({"Game": f"G{g_num}", "Team": "LAD", "Prob": p_d, "Type": "實績", "Score": s_str})
+
+        final_l_odds, final_d_odds = p_l, p_d
+        game_ends = {4:0, 5:0, 6:0, 7:0}
+        for _ in range(10000):
+            c_l, c_d = laa_ws_wins_temp, lad_ws_wins_temp
+            g = c_l + c_d
+            while c_l < 4 and c_d < 4:
+                g += 1
+                if random.random() < calc_true_game_prob(is_laa_home_in_ws(g, ws_hfa_team)): c_l += 1
+                else: c_d += 1
+            game_ends[g] += 1
+
+        curr_g = len(actual_ws_winners)
+        if curr_g < 7 and laa_ws_wins_temp < 4 and lad_ws_wins_temp < 4:
+            chart_data.append({"Game": f"G{curr_g}", "Team": "LAA", "Prob": final_l_odds, "Type": "預測", "Score": "實績起點"})
+            chart_data.append({"Game": f"G{curr_g}", "Team": "LAD", "Prob": final_d_odds, "Type": "預測", "Score": "實績起點"})
+            for g_num in range(curr_g + 1, 8):
+                chart_data.append({"Game": f"G{g_num}", "Team": "LAA", "Prob": final_l_odds, "Type": "預測", "Score": "未來賽事"})
+                chart_data.append({"Game": f"G{g_num}", "Team": "LAD", "Prob": final_d_odds, "Type": "預測", "Score": "未來賽事"})
+
+        st.caption(f"🏆 **經判定本季世界大賽主場優勢方：{ws_hfa_team}** (總決賽採 2-3-2 制度)")
+        df_chart = pd.DataFrame(chart_data)
+        
+        base = alt.Chart(df_chart).encode(
+            x=alt.X('Game:O', sort=g_order, title='賽事進度', axis=alt.Axis(labelAngle=0)),
+            y=alt.Y('Prob:Q', title='預期奪冠率', axis=alt.Axis(format='%'), scale=alt.Scale(domain=[0, 1])),
+            color=alt.Color('Team:N', scale=alt.Scale(domain=['LAA', 'LAD'], range=['#BA0021', '#005A9C']), legend=alt.Legend(title="球隊")),
+            strokeDash=alt.StrokeDash('Type:N', scale=alt.Scale(domain=['實績', '預測'], range=[[1,0], [5,5]]), legend=alt.Legend(title="數據狀態")),
+            tooltip=[
+                alt.Tooltip('Team:N', title='球隊'),
+                alt.Tooltip('Game:N', title='進度'),
+                alt.Tooltip('Prob:Q', title='奪冠機率', format='.1%'),
+                alt.Tooltip('Score:N', title='該場比分 (LAA:LAD)')
+            ]
+        ).properties(height=350)
+        
+        line = base.mark_line(point=True, strokeWidth=3).interactive(bind_y=False, bind_x=False)
+        st.altair_chart(line, use_container_width=True)
+
+        if laa_ws_wins_temp >= 4 or lad_ws_wins_temp >= 4:
+            st.success("🎉 本賽季世界大賽已圓滿結束，冠軍金盃已誕生！")
+        else:
+            c1, c2, c3 = st.columns(3)
+            c1.metric("LAA 奪冠總機率 (Playoff Odds)", f"{(final_l_odds*100.0):.1f}%")
+            c2.metric("LAD 奪冠總機率 (Playoff Odds)", f"{(final_d_odds*100.0):.1f}%")
+            most_likely_games = max(game_ends, key=game_ends.get)
+            c3.metric("預測此系列賽幾場結束", f"Game {most_likely_games}", f"該場完賽機率 {(game_ends[most_likely_games]/100.0):.1f}%")
+
+    else:
+        # ==========================================
+        # 📅 模式 B：10 場例行賽 ROS 預期賽季終局總勝場圖
+        # ==========================================
+        rs_game1_home_team = "LAA" 
+        if curr_s_str and int(curr_s_str) > 1:
+            prev_season_prefix = f"[S{int(curr_s_str) - 1}] 世界大賽"
+            if not df_p_full.empty:
+                prev_ws_df = df_p_full[df_p_full['賽事階段'].astype(str).str.contains(prev_season_prefix, regex=False)]
+                if not prev_ws_df.empty:
+                    laa_prev_w = sum(1 for _, g in prev_ws_df.groupby('賽事階段', sort=False) if any('勝' in str(x) for x in g[g['球隊']=='LAA']['勝敗'].values))
+                    lad_prev_w = sum(1 for _, g in prev_ws_df.groupby('賽事階段', sort=False) if any('勝' in str(x) for x in g[g['球隊']=='LAD']['勝敗'].values))
+                    if lad_prev_w > laa_prev_w: rs_game1_home_team = "LAA"
+                    elif laa_prev_w > lad_prev_w: rs_game1_home_team = "LAD"
+
+        actual_rs_winners = []
+        actual_rs_stages = []
+        current_rs_prefix = f"{curr_prefix} 例行賽"
+        if not df_p_full.empty:
+            rs_df_temp = df_p_full[df_p_full['賽事階段'].astype(str).str.contains(current_rs_prefix, regex=False)]
+            for stage, group in rs_df_temp.groupby('賽事階段', sort=False):
+                g_sorted = group.sort_values('時間戳記')
+                if any('勝' in str(x) for x in g_sorted[g_sorted['球隊']=='LAA']['勝敗'].values): actual_rs_winners.append("LAA")
+                elif any('勝' in str(x) for x in g_sorted[g_sorted['球隊']=='LAD']['勝敗'].values): actual_rs_winners.append("LAD")
+                actual_rs_stages.append(stage)
+        
+        rs_games_played = len(actual_rs_winners)
+        laa_actual_rs_wins = actual_rs_winners.count("LAA")
+        lad_actual_rs_wins = actual_rs_winners.count("LAD")
+        
+        # ✨ 升級：計算在任何指定時間點，基於已拿下的勝場，預期賽末的最終勝場數
+        def get_ros_expected_wins(current_l_wins, current_d_wins, games_played):
+            exp_l = current_l_wins
+            for g in range(games_played + 1, 11):
+                laa_home_game = (g % 2 == 1) if rs_game1_home_team == "LAA" else (g % 2 == 0)
+                exp_l += calc_true_game_prob(laa_home_game)
+            return exp_l, 10.0 - exp_l
+
+        chart_data = []
+        cur_l, cur_d = 0, 0
+        
+        # G0 (開季前的最初預期)
+        exp_l, exp_d = get_ros_expected_wins(0, 0, 0)
+        chart_data.append({"Game": "G0", "Team": "LAA", "Wins": exp_l, "Type": "實績", "Score": "球季開打"})
+        chart_data.append({"Game": "G0", "Team": "LAD", "Wins": exp_d, "Type": "實績", "Score": "球季開打"})
+
+        # G1 至目前已完賽的場次，計算每一場打完後的最新「預期總勝場」
+        for idx, winner in enumerate(actual_rs_winners):
+            g_num = idx + 1
+            if winner == "LAA": cur_l += 1
+            else: cur_d += 1
+            s_str = get_game_score_str(actual_rs_stages[idx])
+            
+            exp_l, exp_d = get_ros_expected_wins(cur_l, cur_d, g_num)
+            chart_data.append({"Game": f"G{g_num}", "Team": "LAA", "Wins": exp_l, "Type": "實績", "Score": s_str})
+            chart_data.append({"Game": f"G{g_num}", "Team": "LAD", "Wins": exp_d, "Type": "實績", "Score": s_str})
+            
+        # 未來賽事：由於期望值的特性，未來的滾動預測線將是一條水平延伸的虛線，總和始終等於 10
+        if rs_games_played < 10:
+            chart_data.append({"Game": f"G{rs_games_played}", "Team": "LAA", "Wins": exp_l, "Type": "預測", "Score": "實績起點"})
+            chart_data.append({"Game": f"G{rs_games_played}", "Team": "LAD", "Wins": exp_d, "Type": "預測", "Score": "實績起點"})
+            
+            for g_num in range(rs_games_played + 1, 11):
+                chart_data.append({"Game": f"G{g_num}", "Team": "LAA", "Wins": exp_l, "Type": "預測", "Score": "未來賽事"})
+                chart_data.append({"Game": f"G{g_num}", "Team": "LAD", "Wins": exp_d, "Type": "預測", "Score": "未來賽事"})
+
+        st.caption(f"🏟️ **例行賽排程設定**：上季世界大賽亞軍 **{rs_game1_home_team}** 自動獲得 G1 主場，後續主客精準交替。")
+        df_chart = pd.DataFrame(chart_data)
+        
+        base = alt.Chart(df_chart).encode(
+            x=alt.X('Game:O', sort=g_order, title='賽事進度', axis=alt.Axis(labelAngle=0)),
+            y=alt.Y('Wins:Q', title='預估賽季最終總勝場', scale=alt.Scale(domain=[0, 10])),
+            color=alt.Color('Team:N', scale=alt.Scale(domain=['LAA', 'LAD'], range=['#BA0021', '#005A9C']), legend=alt.Legend(title="球隊")),
+            strokeDash=alt.StrokeDash('Type:N', scale=alt.Scale(domain=['實績', '預測'], range=[[1,0], [5,5]]), legend=alt.Legend(title="數據狀態")),
+            tooltip=[
+                alt.Tooltip('Team:N', title='球隊'),
+                alt.Tooltip('Game:N', title='進度'),
+                alt.Tooltip('Wins:Q', title='賽季預期總勝場', format='.1f'),
+                alt.Tooltip('Score:N', title='該場比分 (LAA:LAD)')
+            ]
+        ).properties(height=350)
+        
+        line = base.mark_line(point=True, strokeWidth=3).interactive(bind_y=False, bind_x=False)
+        st.altair_chart(line, use_container_width=True)
+
+        seed_string_rs = f"RS_{wr_season}_{rs_games_played}"
+        random.seed(sum(ord(c) for c in seed_string_rs) % 999999)
+        laa_hfa_sims = 0
+        for _ in range(10000):
+            l_w, d_w = laa_actual_rs_wins, lad_actual_rs_wins
+            for g in range(rs_games_played + 1, 11):
+                laa_home_this_game = (g % 2 == 1) if rs_game1_home_team == "LAA" else (g % 2 == 0)
+                if random.random() < calc_true_game_prob(laa_home_this_game): l_w += 1
+                else: d_w += 1
+            if l_w > d_w: laa_hfa_sims += 1
+            elif l_w == d_w: laa_hfa_sims += 0.5 
+
+        st.markdown(f"##### 實時累積勝場：🔴 LAA **{laa_actual_rs_wins}** : **{lad_actual_rs_wins}** 🔵 LAD (目前已賽 **{rs_games_played}** 場)")
+        c1, c2, c3 = st.columns(3)
+        c1.metric("LAA 賽季末預估總勝場", f"{exp_l:.1f} 勝", f"已獲的 {laa_actual_rs_wins} 勝保底")
+        c2.metric("LAD 賽季末預估總勝場", f"{exp_d:.1f} 勝", f"已獲的 {lad_actual_rs_wins} 勝保底")
+        c3.metric("LAA 奪得季後賽主場優勢率", f"{(laa_hfa_sims/100.0):.1f}%", "含5勝5敗比得分期望")
+
+    st.markdown("---")
     
     if st.button("🎙️ 產生賽前深度戰報 (含數據預測與球評講評)", type="primary", use_container_width=True, key="btn_report_tab4_v48_final"):
         if 'save_settings' in globals(): save_settings()

@@ -2815,7 +2815,7 @@ with tab6:
                             st.dataframe(s_counts, use_container_width=True)
 
         # ------------------------------------
-        # 🏛️ 隊史紀錄室 (✨ 團隊大數據核彈級擴充)
+        # 🏛️ 隊史紀錄室 (團隊大數據核彈級擴充)
         # ------------------------------------
         with rec_team:
             st.subheader("🏛️ 隊史與團隊大數據紀錄板 (Franchise Totals & Splitting)")
@@ -3044,14 +3044,16 @@ with tab6:
                 span_str = f"({st_clean} ~ {ed_clean})" if st_clean != ed_clean else f"({st_clean})"
                 
                 # ✨ 全域時空探測：比對該球員在全資料庫的最後出賽時間
-                is_ongoing = False
+                # 並且紀錄的終點必須在當前最新賽季，避免已淘汰/退休的球員詐屍
+                t_name = k[0] if isinstance(k, tuple) else k
                 if streak_type in ['win', 'loss']:
-                    is_ongoing = (h['end_ts'] >= global_last_ts_p_team.get(k, 0))
+                    p_last_ts = global_last_ts_p_team.get(t_name, 0)
                 elif streak_type in ['hit', 'hr', 'hitless']:
-                    is_ongoing = (h['end_ts'] >= global_last_ts_b_player.get(k, 0))
+                    p_last_ts = global_last_ts_b_player.get(k, 0)
                 else:
-                    is_ongoing = (h['end_ts'] >= global_last_ts_p_player.get(k, 0))
+                    p_last_ts = global_last_ts_p_player.get(k, 0)
                     
+                is_ongoing = (h['end_ts'] >= p_last_ts) and (f"[S{max_season}]" in h['end'])
                 ongoing_str = " 🔥(延續中)" if is_ongoing else ""
                 
                 if isinstance(k, tuple): names_list.append(f"[{k[0]}] {k[1]} {span_str}{ongoing_str}")
@@ -3068,13 +3070,12 @@ with tab6:
             display_record("🔥 聯盟最長連勝", w_val_a, w_nam_a, w_val_c, w_nam_c)
             
             hw_val_a, hw_nam_a = get_streak_record_exact(df_p_full, 'win', loc_filter='home')
+            hw_val_c, hw_nam_c = get_streak_record_exact(df_p_curr, 'win', loc_filter='home')
+            display_record("🏠 最長主場連勝", hw_val_a, hw_nam_a, hw_val_c, hw_nam_c)
+            
             aw_val_a, aw_nam_a = get_streak_record_exact(df_p_full, 'win', loc_filter='away')
-            c1, c2 = st.columns(2)
-            hw_disp = hw_nam_a[0] if hw_nam_a else "無"
-            aw_disp = aw_nam_a[0] if aw_nam_a else "無"
-            c1.markdown(f"#### 🏠 歷史最長主場連勝\n**🥇 {hw_val_a} 場**\n\n👤 {hw_disp}")
-            c2.markdown(f"#### ✈️ 歷史最長客場連勝\n**🥇 {aw_val_a} 場**\n\n👤 {aw_disp}")
-            st.divider()
+            aw_val_c, aw_nam_c = get_streak_record_exact(df_p_curr, 'win', loc_filter='away')
+            display_record("✈️ 最長客場連勝", aw_val_a, aw_nam_a, aw_val_c, aw_nam_c)
 
             l_val_a, l_nam_a = get_streak_record_exact(df_p_full, 'loss')
             l_val_c, l_nam_c = get_streak_record_exact(df_p_curr, 'loss')
@@ -3105,7 +3106,7 @@ with tab6:
             display_record("💥 投手連環爆 (連續出賽被全壘打)", hra_val_a, hra_nam_a, hra_val_c, hra_nam_c)
 
         # ------------------------------------
-        # 🤡 聯盟奇葩與毒瘤紀錄 (✨ 同樣引入 <=5人防爆機制)
+        # 🤡 聯盟奇葩與毒瘤紀錄 (✨ UI 極簡化防爆版)
         # ------------------------------------
         with rec_t3:
             st.subheader("🤡 難堪紀錄與奇蹟單場 (The Hall of Shame & Fame)")

@@ -2446,9 +2446,23 @@ with tab6:
     else:
         import re
         import numpy as np
-        curr_s_str = wr_season.split(" ")[1] if wr_season != "十年總成績" else "1"
+        
+        # ✨ 動態精準偵測全歷史最大賽季數
+        all_s_nums = []
+        if not df_p_full.empty:
+            for stg in df_p_full['賽事階段'].dropna().unique():
+                m = re.search(r'\[S(\d+)\]', str(stg))
+                if m: all_s_nums.append(int(m.group(1)))
+        max_season = max(all_s_nums) if all_s_nums else 1
+        
+        curr_s_str = wr_season.split(" ")[1] if wr_season != "十年總成績" else str(max_season)
         curr_s_prefix = f"[S{curr_s_str}]"
         
+        # 建立全域時空掃描器 (精準判定延續中)
+        global_last_ts_p_team = df_p_full.groupby('球隊', sort=False)['時間戳記'].max().to_dict() if not df_p_full.empty else {}
+        global_last_ts_b_player = df_b_full.groupby(['球隊', '球員姓名'], sort=False)['時間戳記'].max().to_dict() if not df_b_full.empty else {}
+        global_last_ts_p_player = df_p_full.groupby(['球隊', '投手姓名'], sort=False)['時間戳記'].max().to_dict() if not df_p_full.empty else {}
+
         def clean_stage_name(stage_str):
             s = str(stage_str)
             return s.replace(" 例行賽 第", "例行 G").replace(" 世界大賽 第", "WS G").replace("場", "")
@@ -2532,29 +2546,28 @@ with tab6:
                 clean_stage = re.sub(r'\[S\d+\]\s*', '', clean_stage_name(stage)) 
                 potg_list.append({"Season": s_num, "賽事階段": clean_stage, "單場MVP": best_p})
 
-        rec_t1, rec_potg, rec_team, rec_t2, rec_t3 = st.tabs(["🎖️ 大獎與單項王", "⭐ 單場 MVP", "🏛️ 隊史紀錄", "🔥 史詩連勝紀錄", "🤡 奇葩紀錄"])
+        rec_t1, rec_potg, rec_team, rec_t2, rec_t3 = st.tabs(["🎖️ 大獎與單項王", "⭐ 單場 MVP", "🏛️ 隊史紀錄室", "🔥 史詩連勝紀錄", "🤡 奇葩紀錄"])
         
         # ------------------------------------
         # 🎖️ 歷屆大獎與單項王
         # ------------------------------------
         with rec_t1:
             st.subheader("👑 歷屆賽季最高榮耀與單項王")
-            max_season = int(curr_s_str) if curr_s_str.isdigit() else 1
             
             def get_hist_awards(s_idx):
                 s_prefix = f"[S{s_idx}]"
-                df_b_rs = df_b_full[(df_b_full['賽事階段'].astype(str).str.contains(s_prefix, regex=False)) & (df_b_full['賽事階段'].astype(str).str.contains("例行賽", regex=False))]
-                df_p_rs = df_p_full[(df_p_full['賽事階段'].astype(str).str.contains(s_prefix, regex=False)) & (df_p_full['賽事階段'].astype(str).str.contains("例行賽", regex=False))]
-                df_b_ws = df_b_full[(df_b_full['賽事階段'].astype(str).str.contains(s_prefix, regex=False)) & (df_b_full['賽事階段'].astype(str).str.contains("世界大賽", regex=False))]
-                df_p_ws = df_p_full[(df_p_full['賽事階段'].astype(str).str.contains(s_prefix, regex=False)) & (df_p_full['賽事階段'].astype(str).str.contains("世界大賽", regex=False))]
+                df_b_rs = df_b_full[(df_b_full['賽事階段'].astype(str).str.contains(s_prefix, regex=False)) & (df_b_full['賽事階段'].astype(str).str.contains("例行賽", regex=False))].copy()
+                df_p_rs = df_p_full[(df_p_full['賽事階段'].astype(str).str.contains(s_prefix, regex=False)) & (df_p_full['賽事階段'].astype(str).str.contains("例行賽", regex=False))].copy()
+                df_b_ws = df_b_full[(df_b_full['賽事階段'].astype(str).str.contains(s_prefix, regex=False)) & (df_b_full['賽事階段'].astype(str).str.contains("世界大賽", regex=False))].copy()
+                df_p_ws = df_p_full[(df_p_full['賽事階段'].astype(str).str.contains(s_prefix, regex=False)) & (df_p_full['賽事階段'].astype(str).str.contains("世界大賽", regex=False))].copy()
                 
                 pos_adj_dict = {"C": 0.5, "SS": 0.4, "2B": 0.2, "3B": 0.2, "CF": 0.2, "LF": -0.2, "RF": -0.2, "1B": -0.3, "DH": -0.5}
                 
                 def extract_and_vote(b_sub, p_sub, is_ws=False, ws_winner=None, rookie_set=None):
                     if b_sub.empty and p_sub.empty: return "無", "無", "無", "無", "無"
                     team_games = b_sub['賽事階段'].nunique() if not b_sub.empty else 1
-                    min_pa = 3.0 if is_ws else max(1.0, team_games * 1.0) # 3局制門檻修正
-                    min_ip = 1.0 if is_ws else max(0.1, team_games * 0.33)
+                    min_pa = max(1.0, team_games * 1.0) 
+                    min_ip = max(0.1, team_games * 0.33)
                     
                     cand = {}
                     if not b_sub.empty:
@@ -2665,8 +2678,8 @@ with tab6:
                     if not p_agg.empty: r_set.update([f"[{r['球隊']}] {r['投手姓名']}" for _, r in p_agg.iterrows()])
                 else:
                     past_regex = "|".join([f"\\[S{i}\\]" for i in range(1, s_idx)])
-                    past_b = df_b_full[df_b_full['賽事階段'].astype(str).str.contains(past_regex)]
-                    past_p = df_p_full[df_p_full['賽事階段'].astype(str).str.contains(past_regex)]
+                    past_b = df_b_full[df_b_full['賽事階段'].astype(str).str.contains(past_regex)] if not df_b_full.empty else pd.DataFrame()
+                    past_p = df_p_full[df_p_full['賽事階段'].astype(str).str.contains(past_regex)] if not df_p_full.empty else pd.DataFrame()
                     vets = set()
                     if not past_b.empty: vets.update([f"[{r['球隊']}] {r['球員姓名']}" for _, r in past_b.iterrows()])
                     if not past_p.empty: vets.update([f"[{r['球隊']}] {r['投手姓名']}" for _, r in past_p.iterrows()])
@@ -2678,10 +2691,10 @@ with tab6:
                     if not curr_p.empty: curr_all.update([f"[{r['球隊']}] {r['投手姓名']}" for _, r in curr_p.iterrows()])
                     r_set = curr_all - vets
 
-                mvp, cy, ss, _, roty = extract_and_vote(df_b_rs, df_p_rs, False, rookie_set=r_set)
-                _, _, _, fmvp, _ = extract_and_vote(df_b_ws, df_p_ws, True, ws_winner_team) if ws_winner_team else ("無", "無", "無", "無 (賽事未完)", "無")
+                mvp, cy, ss, fmvp, roty = extract_and_vote(df_b_rs, df_p_rs, False, rookie_set=r_set)
                 return mvp, cy, ss, roty, fmvp
 
+            # ✨ 滿血迴圈，保證所有歷史賽季都能完美列出
             for s_idx in range(1, max_season + 1):
                 with st.expander(f"📖 Season {s_idx} 賽季大獎與單項王", expanded=(s_idx == max_season)):
                     mvp, cy, ss, roty, fmvp = get_hist_awards(s_idx)
@@ -2697,20 +2710,17 @@ with tab6:
                     st.markdown("---")
                     
                     s_prefix = f"[S{s_idx}] 例行賽"
-                    b_sub = df_b_full[df_b_full['賽事階段'].astype(str).str.contains(s_prefix, regex=False)]
-                    p_sub = df_p_full[df_p_full['賽事階段'].astype(str).str.contains(s_prefix, regex=False)]
+                    b_sub = df_b_full[df_b_full['賽事階段'].astype(str).str.contains(s_prefix, regex=False)] if not df_b_full.empty else pd.DataFrame()
+                    p_sub = df_p_full[df_p_full['賽事階段'].astype(str).str.contains(s_prefix, regex=False)] if not df_p_full.empty else pd.DataFrame()
                     
-                    # 🏏 打擊單項王
                     if not b_sub.empty:
                         b_sub_c = b_sub.copy()
                         for col in ['打席','打數','安打','全壘打','打點']:
                             b_sub_c[col] = pd.to_numeric(b_sub_c.get(col, 0), errors='coerce').fillna(0)
-                        
                         team_games = b_sub_c['賽事階段'].nunique()
-                        min_pa = max(1.0, team_games * 1.0) # 3局制門檻修正
+                        min_pa = max(1.0, team_games * 1.0)
                         b_agg = b_sub_c.groupby(['球隊', '球員姓名']).agg({'打席':'sum','打數':'sum','安打':'sum','全壘打':'sum','打點':'sum'}).reset_index()
                         b_agg = b_agg[b_agg['打席'] >= min_pa]
-                        
                         if not b_agg.empty:
                             b_agg['打擊率'] = b_agg['安打'] / b_agg['打數'].replace(0, 1)
                             avg_df = b_agg[b_agg['打擊率'] > 0]
@@ -2731,7 +2741,6 @@ with tab6:
                             if avg_l == hr_l == rbi_l and avg_l != "無": st.warning(f"🏏 **打擊三冠王誕生！** 👑 **{avg_l}** 統治了打擊區！")
                             st.caption(f"🏏 **打擊單項王** | 全壘打: **{hr_l}** ({hr_v} 轟) / 打擊率: **{avg_l}** ({avg_v:.3f}) / 打點: **{rbi_l}** ({rbi_v} 分) / 安打: **{hit_l}** ({hit_v} 支)")
 
-                    # ⚾ 投球單項王 (含 QS 計算)
                     if not p_sub.empty:
                         p_sub_c = p_sub.copy()
                         p_sub_c['勝'] = p_sub_c['勝敗'].astype(str).apply(lambda x: 1 if '勝' in x else 0)
@@ -2740,8 +2749,6 @@ with tab6:
                         for col in ['局數(整數)', '局數(出局數)', '奪三振', '自責分']:
                             p_sub_c[col] = pd.to_numeric(p_sub_c.get(col, 0), errors='coerce').fillna(0)
                         
-                        # ✨ 判定單場 QS (主投 >= 2局，即 >= 6個出局數，且自責分 <= 1)
-                        # 注意：我們假設每場比賽「該隊的第一位出場投手」就是先發投手
                         p_sub_c = p_sub_c.sort_values('時間戳記')
                         p_sub_c['is_SP'] = p_sub_c.groupby(['球隊', '賽事階段']).cumcount() == 0
                         p_sub_c['outs'] = p_sub_c['局數(整數)'] * 3 + p_sub_c['局數(出局數)']
@@ -2775,7 +2782,7 @@ with tab6:
                         qs_v = int(qs_df['QS'].max()) if not qs_df.empty else 0
                         
                         if w_l == so_l == era_l and w_l != "無": st.warning(f"⚾ **投手三冠王誕生！** 👑 **{w_l}** 宰制了投手丘！")
-                        st.caption(f"⚾ **投球單項王** | 勝投: **{w_l}** ({w_v} W) / 防禦率: **{era_l}** ({era_v:.2f}) / 三振: **{so_l}** ({so_v} K) / 救援: **{sv_l}** ({sv_v} SV) / 中繼: **{hld_l}** ({hld_v} HLD) / 優質先發(QS): **{qs_l}** ({qs_v} 場)")
+                        st.caption(f"⚾ **投球單項王** | 勝投: **{w_l}** ({w_v} W) / 防禦率: **{era_l}** ({era_v:.2f}) / 三振: **{so_l}** ({so_v} K) / 救援: **{sv_l}** ({sv_v} SV) / 中繼: **{hld_l}** ({hld_v} HLD) / QS: **{qs_l}** ({qs_v} 場)")
 
         # ------------------------------------
         # ⭐ 單場 MVP 專屬面板
@@ -2808,10 +2815,58 @@ with tab6:
                             st.dataframe(s_counts, use_container_width=True)
 
         # ------------------------------------
-        # 🏛️ 隊史紀錄 (新增 QS)
+        # 🏛️ 隊史紀錄室 (✨ 團隊大數據核彈級擴充)
         # ------------------------------------
         with rec_team:
-            st.subheader("🏛️ 隊史累積神主牌 (Franchise All-Time Leaders Top 3)")
+            st.subheader("🏛️ 隊史與團隊大數據紀錄板 (Franchise Totals & Splitting)")
+            
+            team_meta_summary = {}
+            for team in ['LAA', 'LAD']:
+                t_p_raw = df_p_full[df_p_full['球隊'] == team].sort_values('時間戳記') if not df_p_full.empty else pd.DataFrame()
+                t_b_raw = df_b_full[df_b_full['球隊'] == team] if not df_b_full.empty else pd.DataFrame()
+                
+                tot_hits = pd.to_numeric(t_b_raw['安打'], errors='coerce').fillna(0).sum() if not t_b_raw.empty else 0
+                tot_hr = pd.to_numeric(t_b_raw['全壘打'], errors='coerce').fillna(0).sum() if not t_b_raw.empty else 0
+                tot_rbi = pd.to_numeric(t_b_raw['打點'], errors='coerce').fillna(0).sum() if not t_b_raw.empty else 0
+                tot_so = pd.to_numeric(t_p_raw['奪三振'], errors='coerce').fillna(0).sum() if not t_p_raw.empty else 0
+                
+                h_w, h_l, h_d = 0, 0, 0
+                a_w, a_l, a_d = 0, 0, 0
+                oner_w, oner_l = 0, 0
+                
+                if not df_p_full.empty:
+                    for stage, group in df_p_full.groupby('賽事階段'):
+                        g_team = group[group['球隊'] == team]
+                        if g_team.empty: continue
+                        
+                        is_w = any('勝' in str(x) for x in g_team['勝敗'].values)
+                        is_l = any('敗' in str(x) for x in g_team['勝敗'].values)
+                        
+                        laa_ra = pd.to_numeric(group[group['球隊']=='LAA']['失分'], errors='coerce').fillna(0).sum()
+                        lad_ra = pd.to_numeric(group[group['球隊']=='LAD']['失分'], errors='coerce').fillna(0).sum()
+                        diff = abs(laa_ra - lad_ra)
+                        
+                        if diff == 1:
+                            if is_w: oner_w += 1
+                            elif is_l: oner_l += 1
+                            
+                        h_team = global_home_dict.get(stage, "Unknown")
+                        if h_team == team:
+                            if is_w: h_w += 1
+                            elif is_l: h_l += 1
+                            else: h_d += 1
+                        else:
+                            if is_w: a_w += 1
+                            elif is_l: a_l += 1
+                            else: a_d += 1
+                        
+                team_meta_summary[team] = {
+                    'hits': int(tot_hits), 'hr': int(tot_hr), 'rbi': int(tot_rbi), 'so': int(tot_so),
+                    'home_rec': f"{h_w}勝 {h_l}敗 {h_d}和 (勝率 {(h_w/(max(1, h_w+h_l))):.3f})",
+                    'away_rec': f"{a_w}勝 {a_l}敗 {a_d}和 (勝率 {(a_w/(max(1, a_w+a_l))):.3f})",
+                    'one_run': f"{oner_w}勝 {oner_l}敗 (勝率 {(oner_w/(max(1, oner_w+oner_l))):.3f})"
+                }
+
             c_laa, c_lad = st.columns(2)
             
             b_agg_all = df_b_full.copy()
@@ -2825,87 +2880,99 @@ with tab6:
             for col in ['局數(整數)', '局數(出局數)', '奪三振', '自責分']:
                 p_agg_all[col] = pd.to_numeric(p_agg_all.get(col, 0), errors='coerce').fillna(0)
             
-            # ✨ 計算全歷史 QS
             p_agg_all = p_agg_all.sort_values('時間戳記')
             p_agg_all['is_SP'] = p_agg_all.groupby(['球隊', '賽事階段']).cumcount() == 0
             p_agg_all['outs'] = p_agg_all['局數(整數)'] * 3 + p_agg_all['局數(出局數)']
             p_agg_all['QS'] = ((p_agg_all['is_SP']) & (p_agg_all['outs'] >= 6) & (p_agg_all['自責分'] <= 1)).astype(int)
-            
             p_all = p_agg_all.groupby(['球隊', '投手姓名']).sum(numeric_only=True).reset_index()
             p_all['局數'] = (p_all['局數(整數)']*3 + p_all['局數(出局數)'])/3.0
             
-            def get_top3_str(df, sort_col, name_col, is_asc=False):
+            def get_top3_str(df, sort_col, name_col):
                 if df.empty: return "無"
-                top3 = df.sort_values(by=sort_col, ascending=is_asc).head(3)
+                top3 = df.sort_values(by=sort_col, ascending=False).head(3)
                 res = []
                 for i, (_, r) in enumerate(top3.iterrows()):
                     val = r[sort_col]
-                    if val <= 0 and not is_asc: continue
+                    if val <= 0: continue
                     res.append(f"{i+1}. {r[name_col]} ({int(val)})")
-                return " | ".join(res) if res else "無"
+                return "  \n".join(res) if res else "無"
 
             def render_team_records(team, col_obj):
                 with col_obj:
-                    st.markdown(f"#### {'🔴' if team=='LAA' else '🔵'} {team} 隊史領先者")
+                    st.markdown(f"#### {'🔴' if team=='LAA' else '🔵'} {team} 隊史神主牌")
+                    
+                    meta = team_meta_summary[team]
+                    st.markdown("##### 📊 歷史團隊累積總和")
+                    st.markdown(f"**團隊火力**：{meta['hits']} 安打 | {meta['hr']} 全壘打 | {meta['rbi']} 打點")
+                    st.markdown(f"**團隊壓制**：{meta['so']} 次防守三振")
+                    
+                    st.markdown("##### 🏟️ 主客場與極端戰績")
+                    st.markdown(f"🏠 **主場戰績**：{meta['home_rec']}")
+                    st.markdown(f"✈️ **客場戰績**：{meta['away_rec']}")
+                    st.markdown(f"📐 **一分差生死戰**：{meta['one_run']}")
+                    st.markdown("---")
+                    
+                    st.markdown("##### 🎖️ 個人累積歷史排行榜 (Top 3)")
                     tb = b_all[b_all['球隊']==team]
                     tp = p_all[p_all['球隊']==team]
                     
                     if not tb.empty:
-                        st.markdown(f"**🏏 隊史安打王**：\n{get_top3_str(tb, '安打', '球員姓名')}")
-                        st.markdown(f"**🚀 隊史全壘打王**：\n{get_top3_str(tb, '全壘打', '球員姓名')}")
-                        st.markdown(f"**🔥 隊史打點王**：\n{get_top3_str(tb, '打點', '球員姓名')}")
+                        st.markdown(f"**🏏 隊史安打榜**：\n{get_top3_str(tb, '安打', '球員姓名')}")
+                        st.markdown(f"**🚀 隊史全壘打榜**：\n{get_top3_str(tb, '全壘打', '球員姓名')}")
+                        st.markdown(f"**🔥 隊史打點榜**：\n{get_top3_str(tb, '打點', '球員姓名')}")
                         st.markdown(f"**🛡️ 隊史鐵人榜 (打席)**：\n{get_top3_str(tb, '打席', '球員姓名')}")
-                        st.markdown(f"**🎯 隊史選球王 (保送)**：\n{get_top3_str(tb, '四壞球', '球員姓名')}")
-                    
                     if not tp.empty:
-                        st.markdown(f"**⚾ 隊史勝投王**：\n{get_top3_str(tp, '勝', '投手姓名')}")
-                        st.markdown(f"**🌪️ 隊史三振王**：\n{get_top3_str(tp, '奪三振', '投手姓名')}")
-                        st.markdown(f"**🔒 隊史救援王**：\n{get_top3_str(tp, '救援', '投手姓名')}")
+                        st.markdown(f"**⚾ 隊史勝投榜**：\n{get_top3_str(tp, '勝', '投手姓名')}")
+                        st.markdown(f"**🌪️ 隊史三振榜**：\n{get_top3_str(tp, '奪三振', '投手姓名')}")
                         st.markdown(f"**🌟 隊史優質先發 (QS)**：\n{get_top3_str(tp, 'QS', '投手姓名')}")
-                        st.markdown(f"**👷 隊史血汗勞工 (局數)**：\n{get_top3_str(tp, '局數', '投手姓名')}")
+                        st.markdown(f"**🔒 隊史救援榜**：\n{get_top3_str(tp, '救援', '投手姓名')}")
                         
             render_team_records("LAA", c_laa)
             render_team_records("LAD", c_lad)
 
         # ------------------------------------
-        # 🔥 史詩級連續紀錄 (✨ SP/RP分離)
+        # 🔥 史詩級連續紀錄 (✨ 左右對比版面 & <=5人防爆機制)
         # ------------------------------------
         def display_record(title, val_all, names_all, val_curr, names_curr, unit="場"):
-            st.markdown(f"**{title}**")
-            if val_all == 0:
-                st.markdown(f"### 🥇 歷史紀錄：0 {unit} ➔ 無")
-            else:
-                if len(names_all) == 1: 
-                    st.markdown(f"### 🥇 歷史紀錄：{val_all} {unit} ➔ {names_all[0]}")
+            st.markdown(f"#### {title}")
+            c1, c2 = st.columns(2)
+            
+            with c1:
+                st.markdown(f"**🥇 歷史最高：{val_all} {unit}**")
+                if val_all == 0:
+                    st.caption("👤 無")
                 else:
-                    st.markdown(f"### 🥇 歷史紀錄：{val_all} {unit} ➔ {names_all[0]} 等(共 {len(names_all)} 位)")
-                    with st.expander("👉 查看所有歷史保持者"):
-                        for n in names_all: st.write(f"- {n}")
-                        
-            if val_curr == 0:
-                st.caption(f"📍 本季最高：0 {unit} ➔ 無")
-            else:
-                if len(names_curr) == 1: 
-                    st.caption(f"📍 本季最高：{val_curr} {unit} ➔ {names_curr[0]}")
+                    if len(names_all) <= 5:
+                        for n in names_all: st.caption(f"👤 {n}")
+                    else:
+                        for n in names_all[:3]: st.caption(f"👤 {n}")
+                        with st.expander(f"🤝 查看其餘 {len(names_all)-3} 位"):
+                            for n in names_all[3:]: st.caption(f"👤 {n}")
+            
+            with c2:
+                st.markdown(f"**📍 本季最高：{val_curr} {unit}**")
+                if val_curr == 0:
+                    st.caption("👤 無")
                 else:
-                    st.caption(f"📍 本季最高：{val_curr} {unit} ➔ {names_curr[0]} 等(共 {len(names_curr)} 位)")
-                    with st.expander("👉 查看本季所有保持者"):
-                        for n in names_curr: st.write(f"- {n}")
-            st.markdown("---")
+                    if len(names_curr) <= 5:
+                        for n in names_curr: st.caption(f"👤 {n}")
+                    else:
+                        for n in names_curr[:3]: st.caption(f"👤 {n}")
+                        with st.expander(f"🤝 查看其餘 {len(names_curr)-3} 位"):
+                            for n in names_curr[3:]: st.caption(f"👤 {n}")
+            st.divider()
 
         def get_streak_record_exact(df, streak_type, loc_filter=None):
             if df.empty: return 0, []
             records = []
             
             if streak_type in ['win', 'loss']:
-                last_ts_dict = df.groupby('球隊', sort=False)['時間戳記'].max().to_dict()
                 for (team, stage), g in df.groupby(['球隊', '賽事階段'], sort=False):
                     ts = g['時間戳記'].min()
                     if streak_type == 'win': cond = any('勝' in str(x) for x in g.get('勝敗', []))
                     else: cond = any('敗' in str(x) for x in g.get('勝敗', []))
                     records.append({'keys': team, 'stage': stage, 'ts': ts, 'cond': cond})
             elif streak_type in ['hit', 'hr', 'hitless']:
-                last_ts_dict = df.groupby(['球隊', '球員姓名'], sort=False)['時間戳記'].max().to_dict()
                 for (team, name, stage), g in df.groupby(['球隊', '球員姓名', '賽事階段'], sort=False):
                     ts = g['時間戳記'].min()
                     hit_v = pd.to_numeric(g['安打'], errors='coerce').fillna(0).sum()
@@ -2916,11 +2983,10 @@ with tab6:
                     elif streak_type == 'hitless': cond = (ab_v > 0 and hit_v == 0)
                     records.append({'keys': (team, name), 'stage': stage, 'ts': ts, 'cond': cond})
             elif streak_type.startswith('zero_run') or streak_type == 'hr_allowed':
-                last_ts_dict = df.groupby(['球隊', '投手姓名'], sort=False)['時間戳記'].max().to_dict()
                 for (team, stage), g_stage in df.groupby(['球隊', '賽事階段'], sort=False):
                     g_stage = g_stage.sort_values('時間戳記')
                     for i, (_, r) in enumerate(g_stage.iterrows()):
-                        is_sp = (i == 0) # 該隊第一位登板為先發
+                        is_sp = (i == 0)
                         if streak_type == 'zero_run_sp' and not is_sp: continue
                         if streak_type == 'zero_run_rp' and is_sp: continue
                         
@@ -2977,7 +3043,15 @@ with tab6:
                 ed_clean = clean_stage_name(h['end'])
                 span_str = f"({st_clean} ~ {ed_clean})" if st_clean != ed_clean else f"({st_clean})"
                 
-                is_ongoing = (h['end_ts'] >= last_ts_dict.get(k, 0))
+                # ✨ 全域時空探測：比對該球員在全資料庫的最後出賽時間
+                is_ongoing = False
+                if streak_type in ['win', 'loss']:
+                    is_ongoing = (h['end_ts'] >= global_last_ts_p_team.get(k, 0))
+                elif streak_type in ['hit', 'hr', 'hitless']:
+                    is_ongoing = (h['end_ts'] >= global_last_ts_b_player.get(k, 0))
+                else:
+                    is_ongoing = (h['end_ts'] >= global_last_ts_p_player.get(k, 0))
+                    
                 ongoing_str = " 🔥(延續中)" if is_ongoing else ""
                 
                 if isinstance(k, tuple): names_list.append(f"[{k[0]}] {k[1]} {span_str}{ongoing_str}")
@@ -2986,10 +3060,9 @@ with tab6:
             return max_streak, names_list
 
         with rec_t2:
-            df_b_curr = df_b_full[df_b_full['賽事階段'].astype(str).str.contains(curr_s_prefix, regex=False)]
+            df_b_curr = df_b_full[df_b_full['賽事階段'].astype(str).str.contains(curr_s_prefix, regex=False)] if not df_b_full.empty else pd.DataFrame()
             df_p_curr = df_p_full[df_p_full['賽事階段'].astype(str).str.contains(curr_s_prefix, regex=False)]
-
-            st.subheader("📈 團隊連勝與連敗 (總和與主客場)")
+            
             w_val_a, w_nam_a = get_streak_record_exact(df_p_full, 'win')
             w_val_c, w_nam_c = get_streak_record_exact(df_p_curr, 'win')
             display_record("🔥 聯盟最長連勝", w_val_a, w_nam_a, w_val_c, w_nam_c)
@@ -2999,15 +3072,14 @@ with tab6:
             c1, c2 = st.columns(2)
             hw_disp = hw_nam_a[0] if hw_nam_a else "無"
             aw_disp = aw_nam_a[0] if aw_nam_a else "無"
-            c1.markdown(f"🏠 **最長主場連勝**：{hw_val_a} 場\n\n({hw_disp})")
-            c2.markdown(f"✈️ **最長客場連勝**：{aw_val_a} 場\n\n({aw_disp})")
-            st.markdown("---")
+            c1.markdown(f"#### 🏠 歷史最長主場連勝\n**🥇 {hw_val_a} 場**\n\n👤 {hw_disp}")
+            c2.markdown(f"#### ✈️ 歷史最長客場連勝\n**🥇 {aw_val_a} 場**\n\n👤 {aw_disp}")
+            st.divider()
 
             l_val_a, l_nam_a = get_streak_record_exact(df_p_full, 'loss')
             l_val_c, l_nam_c = get_streak_record_exact(df_p_curr, 'loss')
             display_record("🥶 聯盟最長連敗 (黑暗期)", l_val_a, l_nam_a, l_val_c, l_nam_c)
 
-            st.subheader("⚾ 個人連續場次")
             h_val_a, h_nam_a = get_streak_record_exact(df_b_full, 'hit')
             h_val_c, h_nam_c = get_streak_record_exact(df_b_curr, 'hit')
             display_record("🏏 最長連續場次安打", h_val_a, h_nam_a, h_val_c, h_nam_c)
@@ -3033,7 +3105,7 @@ with tab6:
             display_record("💥 投手連環爆 (連續出賽被全壘打)", hra_val_a, hra_nam_a, hra_val_c, hra_nam_c)
 
         # ------------------------------------
-        # 🤡 聯盟奇葩與毒瘤紀錄
+        # 🤡 聯盟奇葩與毒瘤紀錄 (✨ 同樣引入 <=5人防爆機制)
         # ------------------------------------
         with rec_t3:
             st.subheader("🤡 難堪紀錄與奇蹟單場 (The Hall of Shame & Fame)")
@@ -3059,18 +3131,18 @@ with tab6:
                 return val, holder_list
 
             def display_extreme(title, val, names, unit=""):
-                st.markdown(f"**{title}**")
+                st.markdown(f"#### {title}")
+                st.markdown(f"**🥇 歷史極端值：{int(val)} {unit}**")
                 if val == 0: 
-                    st.markdown(f"### 🥇 0 {unit} ➔ 無人達標")
+                    st.caption("👤 無人達標")
                 else:
-                    if len(names) == 1: 
-                        st.markdown(f"### 🥇 {int(val)} {unit} ➔ {names[0]}")
+                    if len(names) <= 5:
+                        for n in names: st.caption(f"👤 {n}")
                     else:
-                        st.markdown(f"### 🥇 {int(val)} {unit} ➔ {names[0]} 等(共 {len(names)} 位)")
-                        with st.expander("👉 查看保持者 (最多顯示前 10 位)"):
-                            for n in names[:10]: st.write(f"- {n}")
-                            if len(names) > 10: st.write(f"*(...以及其他 {len(names)-10} 位)*")
-                st.markdown("---")
+                        for n in names[:5]: st.caption(f"👤 {n}")
+                        with st.expander(f"🤝 查看其餘 {len(names)-5} 位"):
+                            for n in names[5:]: st.caption(f"👤 {n}")
+                st.divider()
 
             k_b_val, k_b_nam = get_extreme_clean(df_b_full, '三振', True, False)
             display_extreme("🌪️ 電風扇之王 (單場最多被三振)", k_b_val, k_b_nam, "次")
@@ -3082,9 +3154,8 @@ with tab6:
             display_extreme("🎯 找不著好球帶 (投手單場最多保送)", bb_p_val, bb_p_nam, "次")
             
             df_b_c = df_b_full.copy()
-            df_b_c['打數'] = pd.to_numeric(df_b_c.get('打數', 0), errors='coerce').fillna(0)
-            df_b_c['安打'] = pd.to_numeric(df_b_c.get('安打', 0), errors='coerce').fillna(0)
-            df_b_c['打點'] = pd.to_numeric(df_b_c.get('打點', 0), errors='coerce').fillna(0)
+            for c in ['打數', '安打', '打點']:
+                df_b_c[c] = pd.to_numeric(df_b_c.get(c, 0), errors='coerce').fillna(0)
             
             df_sombrero = df_b_c[(df_b_c['安打'] == 0) & (df_b_c['打數'] >= 3)]
             sombrero_val, sombrero_nam = get_extreme_clean(df_sombrero, '打數', True, False)

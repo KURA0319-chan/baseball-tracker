@@ -2549,7 +2549,7 @@ with tab6:
         rec_t1, rec_potg, rec_team, rec_t2, rec_t3 = st.tabs(["🎖️ 大獎與單項王", "⭐ 單場 MVP", "🏛️ 隊史紀錄室", "🔥 史詩連勝紀錄", "🤯 單場極端紀錄"])
         
         # ------------------------------------
-        # 🎖️ 歷屆大獎與單項王
+        # 🎖️ 歷屆大獎與單項王 (✨ 導入分頁五投票引擎)
         # ------------------------------------
         with rec_t1:
             st.subheader("👑 歷屆賽季最高榮耀與單項王")
@@ -2564,10 +2564,12 @@ with tab6:
                 pos_adj_dict = {"C": 0.5, "SS": 0.4, "2B": 0.2, "3B": 0.2, "CF": 0.2, "LF": -0.2, "RF": -0.2, "1B": -0.3, "DH": -0.5}
                 
                 def extract_and_vote(b_sub, p_sub, is_ws=False, ws_winner=None, rookie_set=None):
-                    if b_sub.empty and p_sub.empty: return "無", "無", "無", "無", "無", {}
+                    if b_sub.empty and p_sub.empty: 
+                        return ("無" if is_ws else ("無", "無", "無", "無", "無", {}))
+                        
                     team_games = b_sub['賽事階段'].nunique() if not b_sub.empty else 1
-                    min_pa = max(1.0, team_games * 1.0) 
-                    min_ip = max(0.1, team_games * 0.33)
+                    min_pa = 3.0 if is_ws else max(1.0, team_games * 1.0) 
+                    min_ip = 1.0 if is_ws else max(0.1, team_games * 0.33)
                     
                     cand = {}
                     if not b_sub.empty:
@@ -2585,15 +2587,11 @@ with tab6:
                             wrc_plus = 100 * (woba / lg_woba) if lg_woba > 0 else 0
                             ewar = (((wrc_plus - 70) / 80) + pos_adj_dict.get(r.get('守位','DH'), 0)) * (r['打席'] / 15)
                             
-                            qual_avg = r['安打']/max(1,r['打數']) if r['打席'] >= min_pa else 0.0
-                            qual_wrc = wrc_plus if r['打席'] >= min_pa else 0
-                            
                             cand[f"[{r['球隊']}] {r['球員姓名']}"] = {
                                 '類型':'打者', 'Pos': r.get('守位', 'DH'), 
                                 'HR':r['全壘打'], 'RBI':r['打點'], 
-                                'AVG': r['安打']/max(1,r['打數']), 'Qual_AVG': qual_avg,
-                                'wRC+': wrc_plus, 'Qual_wRC+': qual_wrc,
-                                'eWAR': ewar
+                                'AVG': r['安打']/max(1,r['打數']), 'wRC+': wrc_plus,
+                                'eWAR': ewar, 'Qual': r['打席'] >= min_pa
                             }
                     
                     if not p_sub.empty:
@@ -2612,71 +2610,110 @@ with tab6:
                         
                         for _, r in p_agg.iterrows():
                             ip_c = (r['局數(整數)']*3 + r['局數(出局數)'])/3.0
-                            era = (r['自責分']*9)/max(1, ip_c) if ip_c>0 else 0.0
-                            fip = (((13*r['被全壘打'])+(3*r['四壞球'])-(2*r['奪三振']))/max(1,ip_c))+3.10 if ip_c>0 else 3.10
-                            ewar = (-0.1*r['自責分']-0.05*r['四壞球']) if ip_c==0 else ((lg_era_base-(era+fip)/2.0)/era_div)*(ip_c/10)
-                            
-                            qual_era = era if ip_c >= min_ip else 99.9
-                            qual_fip = fip if ip_c >= min_ip else 99.9
+                            era = (r['自責分']*9)/max(1, ip_c) if ip_c>0 else float('inf') if r['自責分'] > 0 else 0.0
+                            fip = (((13*r['被全壘打'])+(3*r['四壞球'])-(2*r['奪三振']))/max(1,ip_c))+3.10 if ip_c>0 else float('inf') if (13*r['被全壘打']+3*r['四壞球']-2*r['奪三振'])>0 else 3.10
+                            tra = (era + fip) / 2.0
+                            ewar = (-0.1*r['自責分']-0.05*r['四壞球']) if ip_c==0 else ((lg_era_base-tra)/era_div)*(ip_c/10)
                             
                             name = f"[{r['球隊']}] {r['投手姓名']}"
                             if name in cand:
-                                cand[name].update({'類型':'二刀流', 'W':r['勝'], 'SV':r['救援'], 'HLD':r['中繼'], 'ERA':era, 'Qual_ERA':qual_era, 'K_p':r['奪三振'], 'FIP':fip, 'Qual_FIP':qual_fip})
+                                cand[name].update({'類型':'二刀流', 'W':r['勝'], 'SV':r['救援'], 'HLD':r['中繼'], 'ERA':era, 'K_p':r['奪三振'], 'FIP':fip, 'IP':ip_c, 'Qual': (cand[name]['Qual'] or ip_c >= min_ip)})
                                 cand[name]['eWAR'] += ewar
                             else:
-                                cand[name] = {'類型':'投手', 'W':r['勝'], 'SV':r['救援'], 'HLD':r['中繼'], 'ERA':era, 'Qual_ERA':qual_era, 'K_p':r['奪三振'], 'FIP':fip, 'Qual_FIP':qual_fip, 'eWAR':ewar}
+                                cand[name] = {'類型':'投手', 'W':r['勝'], 'SV':r['救援'], 'HLD':r['中繼'], 'ERA':era, 'K_p':r['奪三振'], 'FIP':fip, 'eWAR':ewar, 'IP':ip_c, 'Qual': ip_c >= min_ip}
                     
-                    if not cand: return "無", "無", "無", "無", "無", {}
-                    leaders = {'HR': max([s.get('HR',0) for s in cand.values()]+[0]), 'RBI': max([s.get('RBI',0) for s in cand.values()]+[0]), 'W': max([s.get('W',0) for s in cand.values()]+[0]), 'K_p': max([s.get('K_p',0) for s in cand.values()]+[0])}
-                    
-                    def get_winner(award, cand_dict):
-                        results = {n: 0 for n in cand_dict}
-                        min_era = min([s.get('Qual_ERA', 99.9) for s in cand_dict.values() if s['類型'] in ['投手', '二刀流']] + [99.9])
-                        for v in (['Traditional']*12 + ['Sabermetric']*10 + ['Balanced']*8):
-                            scores = {}
-                            for n, s in cand_dict.items():
-                                sc, bonus = 0, 0
-                                if award != "FMVP":
-                                    if s.get('HR',0)==leaders['HR'] and leaders['HR']>0: bonus+=30
-                                    if s.get('RBI',0)==leaders['RBI'] and leaders['RBI']>0: bonus+=20
-                                    if s.get('W',0)==leaders['W'] and leaders['W']>0: bonus+=10
-                                    if s.get('K_p',0)==leaders['K_p'] and leaders['K_p']>0: bonus+=20
-                                    if s.get('Qual_ERA',99.9)==min_era and min_era<4.0: bonus+=35
-                                
-                                if award == "MVP":
-                                    if v=='Traditional':
-                                        if s['類型'] in ['打者','二刀流']: sc += s.get('HR',0)*20 + s.get('RBI',0)*10 + bonus + (20 if s.get('Qual_AVG',0)>0.3 else -30 if s.get('Qual_AVG',0)<0.25 else 0)
-                                        if s['類型'] in ['投手','二刀流']: sc += s.get('W',0)*12 + s.get('SV',0)*10 + s.get('K_p',0)*1.5 - s.get('Qual_ERA',99.9)*15 + bonus + (25 if s.get('Qual_ERA',99.9)<3 else 0)
-                                    elif v=='Sabermetric': sc += s.get('eWAR',0)*80 + bonus*0.2
-                                    else: sc += s.get('eWAR',0)*50 + s.get('HR',0)*12 + s.get('W',0)*5 - s.get('Qual_ERA',99.9)*10 + bonus*0.5
-                                elif award == "CyYoung":
-                                    if s['類型']=='打者': continue
-                                    if v=='Traditional': sc += s.get('W',0)*12 + s.get('SV',0)*12 + s.get('K_p',0)*1.5 - s.get('Qual_ERA',99.9)*20 + bonus + (30 if s.get('Qual_ERA',99.9)<2.5 else 0)
-                                    else: sc += s.get('eWAR',0)*60 - s.get('Qual_FIP',99.9)*15 - s.get('Qual_ERA',99.9)*10 + bonus*0.5
-                                elif award == "SilverSlugger":
-                                    if s['類型']=='投手': continue
-                                    if v=='Traditional': sc += s.get('HR',0)*25 + s.get('Qual_AVG',0)*100 + bonus
-                                    else: sc += s.get('eWAR',0)*20 + s.get('Qual_wRC+',0)*2
-                                elif award == "FMVP":
-                                    if ws_winner and f"[{ws_winner}]" not in n: sc -= 1000
-                                    if s['類型'] in ['打者','二刀流']: sc += s.get('HR',0)*40 + s.get('RBI',0)*20 + s.get('wRC+',0)*0.5
-                                    if s['類型'] in ['投手','二刀流']: sc += s.get('W',0)*25 + s.get('SV',0)*25 + s.get('K_p',0)*2 - s.get('ERA',5)*20
-                                    sc += s.get('eWAR',0)*60
-                                
-                                scores[n] = sc + (sum(ord(c) for c in n)%100)/100.0
-                            if scores: results[max(scores.items(), key=lambda x: x[1])[0]] += 1
-                                
-                        if not any(results.values()): return "無"
-                        return max(results.items(), key=lambda x: x[1])[0]
+                    if not cand: 
+                        return ("無" if is_ws else ("無", "無", "無", "無", "無", {}))
 
-                    # ✨ 修復 1：這裡補上缺少的 cand 參數
-                    mvp, cy, ss, fmvp = get_winner("MVP", cand), get_winner("CyYoung", cand), get_winner("SilverSlugger", cand), get_winner("FMVP", cand)
+                    # 篩選「達標」的候選人給大獎評審委員 (確保沒有 0.1 局的去偷獎)
+                    qual_cands = {k: v for k, v in cand.items() if v.get('Qual', False)}
+                    if not qual_cands and not is_ws:
+                        return "無", "無", "無", "無", "無", cand
+
+                    leaders = {'HR': max([s.get('HR',0) for s in qual_cands.values()]+[0]), 'RBI': max([s.get('RBI',0) for s in qual_cands.values()]+[0]), 'W': max([s.get('W',0) for s in qual_cands.values()]+[0]), 'K_p': max([s.get('K_p',0) for s in qual_cands.values()]+[0])}
+
+                    # ✨ 直接引入分頁五的動態 30 人評選引擎
+                    def simulate_voting_local(target_award, cands_dict):
+                        eval_cands = {k: v for k, v in cands_dict.items() if v.get('Qual', False)}
+                        if not eval_cands: return "無"
+                        
+                        results = {name: {'Points': 0} for name in eval_cands}
+                        voter_types = ['Traditional']*12 + ['Sabermetric']*10 + ['Balanced']*8
+                        max_hr, max_rbi, max_w, max_k = leaders.get('HR', 0), leaders.get('RBI', 0), leaders.get('W', 0), leaders.get('K_p', 0)
+                        
+                        valid_eras = [s['ERA'] for s in eval_cands.values() if s['類型'] in ['投手', '二刀流'] and 'ERA' in s]
+                        min_era = min(valid_eras) if valid_eras else 99.9
+
+                        for voter in voter_types:
+                            scores = {}
+                            for name, stats in eval_cands.items():
+                                score, leader_bonus = 0, 0
+                                if target_award != "FMVP": 
+                                    if stats.get('HR', 0) == max_hr and max_hr > 0: leader_bonus += 30
+                                    if stats.get('RBI', 0) == max_rbi and max_rbi > 0: leader_bonus += 20
+                                    if stats.get('W', 0) == max_w and max_w > 0: leader_bonus += 10
+                                    if stats.get('K_p', 0) == max_k and max_k > 0: leader_bonus += 20
+                                    if stats.get('ERA', 99.9) == min_era and min_era < 4.0: leader_bonus += 35
+                                
+                                if target_award == "MVP":
+                                    if voter == 'Traditional':
+                                        if stats['類型'] in ['打者', '二刀流']: score += stats.get('HR', 0)*20 + stats.get('RBI', 0)*10 + leader_bonus + (20 if stats.get('AVG', 0)>0.300 else -30 if stats.get('AVG', 0)<0.250 else 0)
+                                        if stats['類型'] in ['投手', '二刀流']: score += stats.get('W', 0)*12 + stats.get('SV', 0)*10 + stats.get('K_p', 0)*1.5 - stats.get('ERA', 5)*15 + leader_bonus + (25 if stats.get('ERA', 5)<3.00 else 0)
+                                    elif voter == 'Sabermetric': score += stats.get('eWAR', 0)*80 + leader_bonus*0.2 
+                                    else: score += stats.get('eWAR', 0)*50 + stats.get('HR', 0)*12 + stats.get('W', 0)*5 - stats.get('ERA', 5)*10 + leader_bonus*0.5
+                                
+                                elif target_award == "CyYoung":
+                                    if stats['類型'] == '打者': continue
+                                    if stats.get('ERA', 5) > 5.00: score -= 500 
+                                    if voter == 'Traditional': score += stats.get('W', 0)*12 + stats.get('SV', 0)*12 + stats.get('K_p', 0)*1.5 - stats.get('ERA', 5)*20 + leader_bonus + (30 if stats.get('ERA', 5)<2.50 else 0)
+                                    else: score += stats.get('eWAR', 0)*60 - stats.get('FIP', 5)*15 - stats.get('ERA', 5)*10 + leader_bonus*0.5
+                                
+                                elif target_award == "SilverSlugger":
+                                    if stats['類型'] == '投手': continue
+                                    if voter == 'Traditional': score += stats.get('HR', 0)*25 + stats.get('AVG', 0)*100 + leader_bonus
+                                    else: score += stats.get('eWAR', 0)*20 + stats.get('wRC+', 0)*2
+                                
+                                elif target_award == "FMVP":
+                                    if ws_winner and f"[{ws_winner}]" not in name: score -= 1000
+                                    if stats['類型'] in ['打者', '二刀流']: score += stats.get('HR', 0)*40 + stats.get('RBI', 0)*20 + stats.get('wRC+', 0)*0.5
+                                    if stats['類型'] in ['投手', '二刀流']: score += stats.get('W', 0)*25 + stats.get('SV', 0)*25 + stats.get('K_p', 0)*2 - stats.get('ERA', 5)*20
+                                    score += stats.get('eWAR', 0)*60 
+
+                                deterministic_tiebreaker = (sum(ord(c) for c in name) % 100) / 100.0
+                                scores[name] = score + deterministic_tiebreaker 
+                            
+                            if not scores: continue
+                            top5 = sorted(scores.items(), key=lambda x: x[1], reverse=True)[:5]
+                            if len(top5) >= 1: results[top5[0][0]]['Points'] += 14
+                            if len(top5) >= 2: results[top5[1][0]]['Points'] += 9
+                            if len(top5) >= 3: results[top5[2][0]]['Points'] += 8
+                            if len(top5) >= 4: results[top5[3][0]]['Points'] += 5
+                            if len(top5) >= 5: results[top5[4][0]]['Points'] += 3
+                                
+                        df_res = pd.DataFrame.from_dict(results, orient='index').reset_index()
+                        df_res.columns = ['球員', '總積分']
+                        df_res = df_res[df_res['總積分'] > 0].sort_values('總積分', ascending=False)
+                        
+                        if df_res.empty: return "無"
+                        winner_name = df_res.iloc[0]['球員']
+                        w_stats = cands_dict[winner_name]
+                        return f"{winner_name} (eWAR {w_stats.get('eWAR', 0):.1f})"
+
+                    if is_ws:
+                        # 世界大賽 FMVP 限定冠軍隊
+                        return simulate_voting_local("FMVP", qual_cands)
+                    
+                    # 例行賽四大獎
+                    mvp = simulate_voting_local("MVP", qual_cands)
+                    cy = simulate_voting_local("CyYoung", qual_cands)
+                    ss = simulate_voting_local("SilverSlugger", qual_cands)
+                    
                     roty = "無"
                     if rookie_set is not None:
-                        rookie_cands = {k: v for k, v in cand.items() if k in rookie_set}
-                        if rookie_cands: roty = get_winner("MVP", rookie_cands)
+                        rookie_cands = {k: v for k, v in qual_cands.items() if k in rookie_set}
+                        if rookie_cands: roty = simulate_voting_local("MVP", rookie_cands)
                     
-                    return mvp, cy, ss, fmvp, roty, cand
+                    return mvp, cy, ss, roty, "無", cand
 
                 ws_winner_team = None
                 if not df_p_ws.empty:
@@ -2706,62 +2743,31 @@ with tab6:
                     if not curr_p.empty: curr_all.update([f"[{r['球隊']}] {r['投手姓名']}" for _, r in curr_p.iterrows()])
                     r_set = curr_all - vets
 
-                # ✨ 修復 2：將 FMVP 的運算與例行賽分離，確保 FMVP 只吃世界大賽的成績！
-                mvp, cy, ss, _, roty, rs_cand = extract_and_vote(df_b_rs, df_p_rs, False, rookie_set=r_set)
-                
+                mvp, cy, ss, roty, _, rs_cand = extract_and_vote(df_b_rs, df_p_rs, False, rookie_set=r_set)
                 if ws_winner_team:
-                    _, _, _, fmvp, _, _ = extract_and_vote(df_b_ws, df_p_ws, True, ws_winner_team)
+                    fmvp = extract_and_vote(df_b_ws, df_p_ws, True, ws_winner_team)
                 else:
-                    fmvp = "無 (賽事未完)"
+                    fmvp = "無 (賽事未完/尚未產生冠軍)"
                     
-                return mvp, cy, ss, roty, fmvp, rs_cand
-
-                ws_winner_team = None
-                if not df_p_ws.empty:
-                    laa_w = sum(1 for _, g in df_p_ws.groupby('賽事階段', sort=False) if any('勝' in str(x) for x in g[g['球隊']=='LAA']['勝敗'].values))
-                    lad_w = sum(1 for _, g in df_p_ws.groupby('賽事階段', sort=False) if any('勝' in str(x) for x in g[g['球隊']=='LAD']['勝敗'].values))
-                    if laa_w >= 4: ws_winner_team = "LAA"
-                    elif lad_w >= 4: ws_winner_team = "LAD"
-
-                r_set = set()
-                if s_idx == 1: 
-                    b_agg = df_b_rs.groupby(['球隊', '球員姓名']).size().reset_index()
-                    p_agg = df_p_rs.groupby(['球隊', '投手姓名']).size().reset_index()
-                    if not b_agg.empty: r_set.update([f"[{r['球隊']}] {r['球員姓名']}" for _, r in b_agg.iterrows()])
-                    if not p_agg.empty: r_set.update([f"[{r['球隊']}] {r['投手姓名']}" for _, r in p_agg.iterrows()])
-                else:
-                    past_regex = "|".join([f"\\[S{i}\\]" for i in range(1, s_idx)])
-                    past_b = df_b_full[df_b_full['賽事階段'].astype(str).str.contains(past_regex)] if not df_b_full.empty else pd.DataFrame()
-                    past_p = df_p_full[df_p_full['賽事階段'].astype(str).str.contains(past_regex)] if not df_p_full.empty else pd.DataFrame()
-                    vets = set()
-                    if not past_b.empty: vets.update([f"[{r['球隊']}] {r['球員姓名']}" for _, r in past_b.iterrows()])
-                    if not past_p.empty: vets.update([f"[{r['球隊']}] {r['投手姓名']}" for _, r in past_p.iterrows()])
-                    
-                    curr_b = df_b_rs.groupby(['球隊', '球員姓名']).size().reset_index()
-                    curr_p = df_p_rs.groupby(['球隊', '投手姓名']).size().reset_index()
-                    curr_all = set()
-                    if not curr_b.empty: curr_all.update([f"[{r['球隊']}] {r['球員姓名']}" for _, r in curr_b.iterrows()])
-                    if not curr_p.empty: curr_all.update([f"[{r['球隊']}] {r['投手姓名']}" for _, r in curr_p.iterrows()])
-                    r_set = curr_all - vets
-
-                mvp, cy, ss, fmvp, roty, rs_cand = extract_and_vote(df_b_rs, df_p_rs, False, rookie_set=r_set)
                 return mvp, cy, ss, roty, fmvp, rs_cand
 
             for s_idx in range(1, max_season + 1):
-                with st.expander(f"📖 Season {s_idx} 賽季大獎與單項王", expanded=(s_idx == max_season)):
+                with st.expander(f"📖 Season {s_idx} 賽季大獎與最佳陣容", expanded=(s_idx == max_season)):
                     mvp, cy, ss, roty, fmvp, rs_cand = get_hist_awards(s_idx)
-                    c1, c2, c3 = st.columns(3)
+                    
+                    # ✨ 直接條列大獎得主，拒絕臃腫分頁與表格！
+                    st.markdown("##### 🏆 年度大獎得主")
+                    c1, c2 = st.columns(2)
                     with c1:
-                        st.markdown(f"**年度 MVP**：{mvp}")
-                        st.markdown(f"**新人王 ROTY**：{roty}")
+                        st.markdown(f"**🏅 年度 MVP**：\n{mvp}")
+                        st.markdown(f"**⚾ 賽揚獎 (Cy Young)**：\n{cy}")
+                        st.markdown(f"**🌟 世界大賽 FMVP**：\n{fmvp}")
                     with c2:
-                        st.markdown(f"**賽揚獎**：{cy}")
-                        st.markdown(f"**銀棒獎**：{ss}")
-                    with c3:
-                        st.markdown(f"**世界大賽 FMVP**：{fmvp}")
+                        st.markdown(f"**👶 新人王 (ROTY)**：\n{roty}")
+                        st.markdown(f"**🏏 銀棒獎 (Silver Slugger)**：\n{ss}")
                     st.markdown("---")
                     
-                    # ✨ 建立年度最佳陣容第一隊 (All-MLB First Team)
+                    # ✨ 年度最佳陣容第一隊 (All-MLB First Team)
                     st.markdown("##### 🌟 年度最佳陣容第一隊 (All-MLB First Team)")
                     first_team = {}
                     if rs_cand:
@@ -2771,16 +2777,13 @@ with tab6:
                         
                         def get_best_hitter(pos_list, is_dh=False):
                             if is_dh:
-                                # DH 開放給所有未入選其他守備位置的「最強遺珠」
-                                cands = {k: v for k, v in batters.items() if k not in selected_players}
-                                empty_reason = "無 (無剩餘打者)"
+                                cands = {k: v for k, v in batters.items() if k not in selected_players and v.get('Qual', False)}
+                                empty_reason = "無 (無剩餘達標打者)"
                             else:
-                                cands = {k: v for k, v in batters.items() if v.get('Pos', 'DH') in pos_list and k not in selected_players}
+                                cands = {k: v for k, v in batters.items() if v.get('Pos', 'DH') in pos_list and k not in selected_players and v.get('Qual', False)}
                                 empty_reason = "無 (無人達打席門檻)"
                                 
                             if not cands: return empty_reason
-                            
-                            # 🚫 嚴格門檻：eWAR 必須大於 0 才夠格稱為最佳陣容
                             pos_cands = {k: v for k, v in cands.items() if v['eWAR'] > 0}
                             if not pos_cands: return "無 (貢獻值皆為負)"
                             
@@ -2794,41 +2797,33 @@ with tab6:
                         first_team['3B'] = get_best_hitter(['3B'])
                         first_team['SS'] = get_best_hitter(['SS'])
                         
-                        # OF 取最強三名
-                        of_base = {k: v for k, v in batters.items() if v.get('Pos', 'DH') in ['LF', 'CF', 'RF', 'OF'] and k not in selected_players}
+                        of_base = {k: v for k, v in batters.items() if v.get('Pos', 'DH') in ['LF', 'CF', 'RF', 'OF'] and k not in selected_players and v.get('Qual', False)}
                         of_cands = {k: v for k, v in of_base.items() if v['eWAR'] > 0}
-                        if not of_base:
-                            first_team['OF'] = "無 (無外野手達標)"
-                        elif not of_cands:
-                            first_team['OF'] = "無 (外野貢獻值皆為負)"
+                        if not of_base: first_team['OF'] = "無 (無外野手達標)"
+                        elif not of_cands: first_team['OF'] = "無 (外野貢獻值皆為負)"
                         else:
                             top_ofs = sorted(of_cands.items(), key=lambda x: x[1]['eWAR'], reverse=True)[:3]
                             for x in top_ofs: selected_players.add(x[0])
                             first_team['OF'] = " / ".join([f"{x[0]} (eWAR {x[1]['eWAR']:.1f})" for x in top_ofs])
-                            if len(top_ofs) < 3: first_team['OF'] += f"  \n*(註：僅 {len(top_ofs)} 位外野手 eWAR > 0)*"
+                            if len(top_ofs) < 3: first_team['OF'] += f"  \n*(註：僅 {len(top_ofs)} 位外野手達標且 eWAR > 0)*"
                             
-                        # DH 判定：所有人都可以競爭的「最佳遺珠」
                         first_team['DH'] = get_best_hitter([], is_dh=True)
                         
-                        # 投手判定
                         if pitchers:
-                            sp_base = pitchers
+                            sp_base = {k: v for k, v in pitchers.items() if v.get('Qual', False)}
                             sp_cands = {k: v for k, v in sp_base.items() if v['eWAR'] > 0}
-                            if not sp_cands:
-                                first_team['SP'] = "無 (先發貢獻值皆為負)"
+                            if not sp_base: first_team['SP'] = "無 (無先發達局數門檻)"
+                            elif not sp_cands: first_team['SP'] = "無 (先發貢獻值皆為負)"
                             else:
                                 best_sp = max(sp_cands.items(), key=lambda x: x[1]['eWAR'])
                                 first_team['SP'] = f"{best_sp[0]} (eWAR {best_sp[1]['eWAR']:.1f}, {best_sp[1]['ERA']:.2f} ERA)"
-                        else:
-                            first_team['SP'] = "無 (無投手達標)"
+                        else: first_team['SP'] = "無 (無投手資料)"
                             
                         rp_base = {k: v for k, v in pitchers.items() if v.get('SV', 0) > 0 or v.get('HLD', 0) > 0}
-                        if not rp_base:
-                            first_team['RP'] = "無 (無人有中繼/救援紀錄)"
+                        if not rp_base: first_team['RP'] = "無 (無人有中繼/救援紀錄)"
                         else:
                             rp_cands = {k: v for k, v in rp_base.items() if v['eWAR'] > 0}
-                            if not rp_cands:
-                                first_team['RP'] = "無 (牛棚貢獻值皆為負)"
+                            if not rp_cands: first_team['RP'] = "無 (牛棚貢獻值皆為負)"
                             else:
                                 best_rp = max(rp_cands.items(), key=lambda x: x[1]['eWAR'])
                                 first_team['RP'] = f"{best_rp[0]} (eWAR {best_rp[1]['eWAR']:.1f}, {int(best_rp[1]['SV'])} SV, {int(best_rp[1].get('HLD', 0))} HLD)"
@@ -2841,6 +2836,8 @@ with tab6:
                     tc3.markdown(f"**🦅 外野手 (OF)**：\n{first_team.get('OF', '無')}\n\n**☄️ 指定打擊 (DH)**：\n{first_team.get('DH', '無')}")
                     st.markdown("---")
                     
+                    # 🏅 各項單項王計算
+                    st.markdown("##### 🏅 賽季單項領先者")
                     s_prefix = f"[S{s_idx}] 例行賽"
                     b_sub = df_b_full[df_b_full['賽事階段'].astype(str).str.contains(s_prefix, regex=False)] if not df_b_full.empty else pd.DataFrame()
                     p_sub = df_p_full[df_p_full['賽事階段'].astype(str).str.contains(s_prefix, regex=False)] if not df_p_full.empty else pd.DataFrame()

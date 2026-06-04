@@ -141,10 +141,11 @@ def get_player_list(sheet_name):
 st.set_page_config(page_title="LAA vs LAD 數據中心", page_icon="⚾", layout="wide")
 st.title("⚾ 洛杉磯雙雄數據追蹤系統 V48 (完美連動修正版)")
 
-tab1, tab2, tab3, tab4, tab5 = st.tabs([
+tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
     "📋 打擊單場輸入", 
     "⚾ 投球單場輸入", 
-    "📊 數據總表", 
+    "📊 數據總表",
+    "📈 進階球探雷達", 
     "📡 賽前戰報", 
     "🏛️ 歷史與榮耀殿堂"
 ])
@@ -762,11 +763,266 @@ with tab3:
                     })
                     st.dataframe(styled_p, use_container_width=True, hide_index=True, column_config=p_col_config)
     else: st.info("目前沒有投球紀錄可以顯示！")
-
 # ==========================================
-# --- 分頁 4：📋 賽前戰情室 (究極防護完整版) ---
+# --- 分頁 4：📈 進階球探雷達 (Baseball Savant PR) ---
 # ==========================================
 with tab4:
+    st.header("📈 進階球探雷達 (Savant Percentile Rankings)")
+    st.caption("仿照大聯盟 Baseball Savant 打造的 PR 值紅藍圖與預期數據 (xStats)。數值代表該球員在全聯盟中的百分位數 (PR 100 = 聯盟第一的極致表現)。")
+
+    df_b_savant = st.session_state.get('df_b_raw', pd.DataFrame())
+    df_p_savant = st.session_state.get('df_p_raw', pd.DataFrame())
+
+    if df_b_savant.empty and df_p_savant.empty:
+        st.warning("⚠️ 目前無數據可供分析。")
+    else:
+        import re
+        import numpy as np
+        
+        if 'sv_team' not in st.session_state: st.session_state['sv_team'] = None
+        if 'sv_player' not in st.session_state: st.session_state['sv_player'] = None
+        if 'sv_type' not in st.session_state: st.session_state['sv_type'] = "打者 (Batter)"
+        
+        def update_sv_type(): st.session_state['sv_type'] = st.session_state['sv_type_sel']
+        def update_sv_team(): st.session_state['sv_team'] = st.session_state['sv_team_sel']
+        def update_sv_player(): st.session_state['sv_player'] = st.session_state['sv_player_sel']
+
+        savant_seasons = ["生涯總成績"]
+        all_s_stages = df_p_savant['賽事階段'].unique() if not df_p_savant.empty else []
+        s_nums = sorted(list(set([int(re.search(r'\[S(\d+)\]', str(s)).group(1)) for s in all_s_stages if re.search(r'\[S(\d+)\]', str(s))])))
+        for s in s_nums: savant_seasons.append(f"Season {s}")
+        
+        target_savant_season = st.selectbox("📅 選擇評估範圍", savant_seasons, key="savant_season_sel")
+        
+        if target_savant_season != "生涯總成績":
+            s_num_str = target_savant_season.split(" ")[1]
+            s_pref = f"[S{s_num_str}]"
+            b_pool = df_b_savant[df_b_savant['賽事階段'].astype(str).str.contains(s_pref, regex=False)]
+            p_pool = df_p_savant[df_p_savant['賽事階段'].astype(str).str.contains(s_pref, regex=False)]
+        else:
+            b_pool = df_b_savant.copy()
+            p_pool = df_p_savant.copy()
+            
+        b_agg = pd.DataFrame()
+        p_agg = pd.DataFrame()
+        
+        # ⚾ 整理打者數據並計算 PR
+        if not b_pool.empty:
+            for c in ['打席','打數','安打','二壘安打','三壘安打','全壘打','打點','四壞球','三振']: 
+                b_pool[c] = pd.to_numeric(b_pool.get(c, 0), errors='coerce').fillna(0)
+            b_agg = b_pool.groupby(['球隊', '球員姓名']).sum(numeric_only=True).reset_index()
+            b_agg = b_agg[b_agg['打席'] > 0].copy()
+            min_pa_savant = 5 if target_savant_season != "生涯總成績" else 10
+            b_agg['Qual'] = b_agg['打席'] >= min_pa_savant
+            
+            if not b_agg.empty:
+                b_agg['1B'] = b_agg['安打'] - b_agg['二壘安打'] - b_agg['三壘安打'] - b_agg['全壘打']
+                b_agg['wOBA'] = (0.69*b_agg['四壞球'] + 0.88*b_agg['1B'] + 1.25*b_agg['二壘安打'] + 1.59*b_agg['三壘安打'] + 2.06*b_agg['全壘打']) / b_agg['打席']
+                
+                t_pa = b_pool['打席'].sum()
+                lg_1b = b_pool['安打'].sum() - b_pool['二壘安打'].sum() - b_pool['三壘安打'].sum() - b_pool['全壘打'].sum()
+                lg_woba_num = 0.69 * b_pool['四壞球'].sum() + 0.88 * lg_1b + 1.25 * b_pool['二壘安打'].sum() + 1.59 * b_pool['三壘安打'].sum() + 2.06 * b_pool['全壘打'].sum()
+                lg_woba = lg_woba_num / t_pa if t_pa > 0 else 0.001
+                b_agg['wRC+'] = 100 * (b_agg['wOBA'] / lg_woba)
+                
+                b_agg['HR%'] = b_agg['全壘打'] / b_agg['打席']
+                b_agg['BB%'] = b_agg['四壞球'] / b_agg['打席']
+                b_agg['K%'] = b_agg['三振'] / b_agg['打席']
+                b_agg['ISO'] = (b_agg['1B'] + 2*b_agg['二壘安打'] + 3*b_agg['三壘安打'] + 4*b_agg['全壘打']) / b_agg['打數'].replace(0, 1) - (b_agg['安打']/b_agg['打數'].replace(0, 1))
+                b_agg['BABIP'] = (b_agg['安打'] - b_agg['全壘打']) / (b_agg['打數'] - b_agg['三振'] - b_agg['全壘打']).replace(0, 1)
+                
+                lg_babip_num = b_pool['安打'].sum() - b_pool['全壘打'].sum()
+                lg_babip_den = b_pool['打數'].sum() - b_pool['三振'].sum() - b_pool['全壘打'].sum()
+                lg_babip = lg_babip_num / lg_babip_den if lg_babip_den > 0 else 0.300
+                
+                b_agg['BIP'] = b_agg['打數'] - b_agg['三振'] - b_agg['全壘打']
+                b_agg['actual_BIP_hits'] = b_agg['安打'] - b_agg['全壘打']
+                b_agg['xHits_BIP'] = b_agg['BIP'] * lg_babip
+                b_agg['luck_ratio'] = np.where(b_agg['actual_BIP_hits'] > 0, b_agg['xHits_BIP'] / b_agg['actual_BIP_hits'], 1.0)
+                
+                b_agg['x1B'] = b_agg['1B'] * b_agg['luck_ratio']
+                b_agg['x2B'] = b_agg['二壘安打'] * b_agg['luck_ratio']
+                b_agg['x3B'] = b_agg['三壘安打'] * b_agg['luck_ratio']
+                b_agg['xBA'] = (b_agg['xHits_BIP'] + b_agg['全壘打']) / b_agg['打數'].replace(0, 1)
+                b_agg['xSLG'] = (b_agg['x1B'] + 2*b_agg['x2B'] + 3*b_agg['x3B'] + 4*b_agg['全壘打']) / b_agg['打數'].replace(0, 1)
+                b_agg['xwOBA'] = (0.69*b_agg['四壞球'] + 0.88*b_agg['x1B'] + 1.25*b_agg['x2B'] + 1.59*b_agg['x3B'] + 2.06*b_agg['全壘打']) / b_agg['打席'].replace(0, 1)
+                
+                b_agg['PR_wOBA'] = b_agg['wOBA'].rank(pct=True) * 100
+                b_agg['PR_xwOBA'] = b_agg['xwOBA'].rank(pct=True) * 100
+                b_agg['PR_wRC+'] = b_agg['wRC+'].rank(pct=True) * 100
+                b_agg['PR_xBA'] = b_agg['xBA'].rank(pct=True) * 100
+                b_agg['PR_xSLG'] = b_agg['xSLG'].rank(pct=True) * 100
+                b_agg['PR_HR%'] = b_agg['HR%'].rank(pct=True) * 100
+                b_agg['PR_ISO'] = b_agg['ISO'].rank(pct=True) * 100
+                b_agg['PR_BB%'] = b_agg['BB%'].rank(pct=True) * 100
+                b_agg['PR_K%'] = b_agg['K%'].rank(pct=True, ascending=False) * 100 
+
+        # ⚾ 整理投手數據並計算 PR (✨ 支援 0出局核爆投手與 xBA)
+        if not p_pool.empty:
+            for c in ['局數(整數)', '局數(出局數)', '奪三振', '自責分', '四壞球', '被全壘打', '被安打']: 
+                p_pool[c] = pd.to_numeric(p_pool.get(c, 0), errors='coerce').fillna(0)
+            p_agg = p_pool.groupby(['球隊', '投手姓名']).sum(numeric_only=True).reset_index()
+            p_agg['IP'] = (p_agg['局數(整數)']*3 + p_agg['局數(出局數)'])/3.0
+            
+            # ✨ 不再剔除 0 局投手，直接全納入！
+            min_ip_savant = 2.0 if target_savant_season != "生涯總成績" else 5.0
+            p_agg['Qual'] = p_agg['IP'] >= min_ip_savant
+            
+            if not p_agg.empty:
+                # 使用 0.001 避免除以 0，完美還原 0局核爆投手的無限大防禦率
+                ip_safe = p_agg['IP'].replace(0, 0.001)
+                
+                p_agg['ERA'] = (p_agg['自責分'] * 9) / ip_safe
+                p_agg['FIP'] = (((13*p_agg['被全壘打'])+(3*p_agg['四壞球'])-(2*p_agg['奪三振']))/ip_safe) + 3.10
+                p_agg['xERA'] = (p_agg['ERA'] + p_agg['FIP']) / 2.0 
+                p_agg['WHIP'] = (p_agg['被安打'] + p_agg['四壞球']) / ip_safe
+                p_agg['K9'] = (p_agg['奪三振'] * 9) / ip_safe
+                p_agg['BB9'] = (p_agg['四壞球'] * 9) / ip_safe
+                p_agg['HR9'] = (p_agg['被全壘打'] * 9) / ip_safe
+                
+                # ✨ 投手被打擊率 (BA) 與預期被打擊率 (xBA) 運算
+                p_agg['Outs'] = p_agg['局數(整數)']*3 + p_agg['局數(出局數)']
+                p_agg['AB_against'] = p_agg['Outs'] + p_agg['被安打']
+                ab_safe = p_agg['AB_against'].replace(0, 0.001)
+                
+                lg_p_h = p_pool['被安打'].sum()
+                lg_p_hr = p_pool['被全壘打'].sum()
+                lg_p_k = p_pool['奪三振'].sum()
+                lg_p_outs = p_pool['局數(整數)'].sum()*3 + p_pool['局數(出局數)'].sum()
+                lg_p_ab = lg_p_outs + lg_p_h
+                lg_p_bip = lg_p_ab - lg_p_k - lg_p_hr
+                lg_p_babip = (lg_p_h - lg_p_hr) / lg_p_bip if lg_p_bip > 0 else 0.300
+                
+                p_agg['BIP_against'] = p_agg['AB_against'] - p_agg['奪三振'] - p_agg['被全壘打']
+                p_agg['xHits_BIP_against'] = p_agg['BIP_against'] * lg_p_babip
+                
+                p_agg['BA'] = p_agg['被安打'] / ab_safe
+                p_agg['xBA'] = (p_agg['xHits_BIP_against'] + p_agg['被全壘打']) / ab_safe
+                
+                # 投手 PR 轉換 (負面數據越低越好 -> ascending=False)
+                p_agg['PR_ERA'] = p_agg['ERA'].rank(pct=True, ascending=False) * 100
+                p_agg['PR_xERA'] = p_agg['xERA'].rank(pct=True, ascending=False) * 100
+                p_agg['PR_FIP'] = p_agg['FIP'].rank(pct=True, ascending=False) * 100
+                p_agg['PR_WHIP'] = p_agg['WHIP'].rank(pct=True, ascending=False) * 100
+                p_agg['PR_K9'] = p_agg['K9'].rank(pct=True) * 100
+                p_agg['PR_BB9'] = p_agg['BB9'].rank(pct=True, ascending=False) * 100
+                p_agg['PR_HR9'] = p_agg['HR9'].rank(pct=True, ascending=False) * 100
+                p_agg['PR_BA'] = p_agg['BA'].rank(pct=True, ascending=False) * 100
+                p_agg['PR_xBA'] = p_agg['xBA'].rank(pct=True, ascending=False) * 100
+
+        col_type, col_team, col_name = st.columns([1, 1, 2])
+        with col_type:
+            type_idx = 0 if st.session_state['sv_type'] == "打者 (Batter)" else 1
+            player_type = st.radio("🔍 評估身分", ["打者 (Batter)", "投手 (Pitcher)"], index=type_idx, key='sv_type_sel', on_change=update_sv_type)
+        
+        all_teams = sorted(list(set(b_pool['球隊'].dropna().unique().tolist() + p_pool['球隊'].dropna().unique().tolist())))
+        if not all_teams: all_teams = ["無數據"]
+        
+        with col_team:
+            team_idx = all_teams.index(st.session_state['sv_team']) if st.session_state['sv_team'] in all_teams else 0
+            selected_team = st.selectbox("⚾ 選擇球隊", all_teams, index=team_idx, key='sv_team_sel', on_change=update_sv_team)
+            
+        with col_name:
+            if player_type == "打者 (Batter)":
+                names = b_agg[b_agg['球隊'] == selected_team]['球員姓名'].tolist() if not b_agg.empty else []
+                if not names:
+                    st.warning("該球隊無打者資料")
+                    selected_player = None
+                else:
+                    sorted_names = sorted(names)
+                    player_idx = sorted_names.index(st.session_state['sv_player']) if st.session_state['sv_player'] in sorted_names else 0
+                    selected_player = st.selectbox("👤 選擇打者", sorted_names, index=player_idx, key='sv_player_sel', on_change=update_sv_player)
+            else:
+                names = p_agg[p_agg['球隊'] == selected_team]['投手姓名'].tolist() if not p_agg.empty else []
+                if not names:
+                    st.warning("該球隊無投手資料")
+                    selected_player = None
+                else:
+                    sorted_names = sorted(names)
+                    player_idx = sorted_names.index(st.session_state['sv_player']) if st.session_state['sv_player'] in sorted_names else 0
+                    selected_player = st.selectbox("👤 選擇投手", sorted_names, index=player_idx, key='sv_player_sel', on_change=update_sv_player)
+
+        st.divider()
+
+        # 🎨 Baseball Savant 風格 CSS 繪製引擎
+        def render_savant_bar(label, pr_val, raw_val_str, is_qual=True):
+            if pd.isna(pr_val): return
+            # ✨ 鎖定範圍 1-100，讓第一名顯示霸氣的 100
+            pr = max(1, min(100, int(round(pr_val))))
+            
+            if pr >= 90: color = "#d73027"   
+            elif pr >= 70: color = "#fc8d59" 
+            elif pr >= 40: color = "#e0e0e0" 
+            elif pr >= 10: color = "#91bfdb" 
+            else: color = "#4575b4"          
+            
+            if is_qual:
+                bg_style = f"background-color: {color};"
+            else:
+                bg_style = f"background: repeating-linear-gradient(45deg, {color}, {color} 8px, #2b2b2b 8px, #2b2b2b 16px);"
+            
+            html = f"""
+            <div style="display: flex; align-items: center; margin-bottom: 12px; font-family: sans-serif;">
+                <div style="width: 170px; font-weight: 600; font-size: 15px;">{label}</div>
+                <div style="width: 70px; text-align: right; margin-right: 15px; font-size: 14px; color: gray;">{raw_val_str}</div>
+                <div style="flex-grow: 1; background-color: #2b2b2b; height: 22px; border-radius: 4px; position: relative; overflow: hidden;">
+                    <div style="width: {pr}%; {bg_style} height: 100%; border-radius: 4px; transition: width 0.5s ease-in-out;"></div>
+                </div>
+                <div style="width: 45px; text-align: right; font-weight: 800; font-size: 17px; color: {color};">{pr}</div>
+            </div>
+            """
+            st.markdown(html, unsafe_allow_html=True)
+
+        if selected_player:
+            c_rad, c_desc = st.columns([2, 1])
+            with c_rad:
+                if player_type == "打者 (Batter)":
+                    p_data = b_agg[(b_agg['球隊'] == selected_team) & (b_agg['球員姓名'] == selected_player)].iloc[0]
+                    is_q = p_data['Qual']
+                    st.markdown(f"### 🎯 [{selected_team}] {selected_player} 的雷達圖")
+                    if not is_q: st.warning(f"⚠️ 該打者僅有 {int(p_data['打席'])} 打席，尚未達到規定門檻，PR值波動較大僅供參考。")
+                    
+                    render_savant_bar("綜合指標 (wRC+)", p_data['PR_wRC+'], f"{p_data['wRC+']:.0f}", is_q)
+                    render_savant_bar("預期火力 (xwOBA)", p_data['PR_xwOBA'], f"{p_data['xwOBA']:.3f}", is_q)
+                    render_savant_bar("表面火力 (wOBA)", p_data['PR_wOBA'], f"{p_data['wOBA']:.3f}", is_q)
+                    render_savant_bar("預期打擊率 (xBA)", p_data['PR_xBA'], f"{p_data['xBA']:.3f}", is_q)
+                    render_savant_bar("預期長打率 (xSLG)", p_data['PR_xSLG'], f"{p_data['xSLG']:.3f}", is_q)
+                    render_savant_bar("純長打力 (ISO)", p_data['PR_ISO'], f"{p_data['ISO']:.3f}", is_q)
+                    render_savant_bar("開轟能力 (HR%)", p_data['PR_HR%'], f"{p_data['HR%']*100:.1f}%", is_q)
+                    render_savant_bar("選球能力 (BB%)", p_data['PR_BB%'], f"{p_data['BB%']*100:.1f}%", is_q)
+                    render_savant_bar("不易三振 (K%)", p_data['PR_K%'], f"{p_data['K%']*100:.1f}%", is_q)
+                else:
+                    p_data = p_agg[(p_agg['球隊'] == selected_team) & (p_agg['投手姓名'] == selected_player)].iloc[0]
+                    is_q = p_data['Qual']
+                    st.markdown(f"### 🎯 [{selected_team}] {selected_player} 的雷達圖")
+                    if not is_q: st.warning(f"⚠️ 該投手僅投 {p_data['IP']:.1f} 局，尚未達到規定門檻，PR值波動較大僅供參考。")
+                    
+                    render_savant_bar("預期防禦率 (xERA)", p_data['PR_xERA'], f"{p_data['xERA']:.2f}", is_q)
+                    render_savant_bar("獨立防禦率 (FIP)", p_data['PR_FIP'], f"{p_data['FIP']:.2f}", is_q)
+                    render_savant_bar("表面防禦率 (ERA)", p_data['PR_ERA'], f"{p_data['ERA']:.2f}", is_q)
+                    render_savant_bar("預期被打擊率 (xBA)", p_data['PR_xBA'], f"{p_data['xBA']:.3f}", is_q)
+                    render_savant_bar("被打擊率 (BA)", p_data['PR_BA'], f"{p_data['BA']:.3f}", is_q)
+                    render_savant_bar("每局被上壘率 (WHIP)", p_data['PR_WHIP'], f"{p_data['WHIP']:.2f}", is_q)
+                    render_savant_bar("三振能力 (K/9)", p_data['PR_K9'], f"{p_data['K9']:.1f}", is_q)
+                    render_savant_bar("控球能力 (BB/9)", p_data['PR_BB9'], f"{p_data['BB9']:.1f}", is_q)
+                    render_savant_bar("壓制長打 (HR/9)", p_data['PR_HR9'], f"{p_data['HR9']:.1f}", is_q)
+            
+            with c_desc:
+                st.markdown("#### 📖 圖例說明")
+                st.markdown("""
+                <div style="margin-bottom: 8px;"><span style="display:inline-block; width:15px; height:15px; background-color:#d73027; border-radius:3px; vertical-align:middle;"></span> <b style="color:#d73027;">PR 90-100</b>：聯盟頂尖</div>
+                <div style="margin-bottom: 8px;"><span style="display:inline-block; width:15px; height:15px; background-color:#fc8d59; border-radius:3px; vertical-align:middle;"></span> <b style="color:#fc8d59;">PR 70-89</b>：優於平均</div>
+                <div style="margin-bottom: 8px;"><span style="display:inline-block; width:15px; height:15px; background-color:#e0e0e0; border-radius:3px; vertical-align:middle;"></span> <b style="color:#e0e0e0;">PR 40-69</b>：聯盟平均</div>
+                <div style="margin-bottom: 8px;"><span style="display:inline-block; width:15px; height:15px; background-color:#91bfdb; border-radius:3px; vertical-align:middle;"></span> <b style="color:#91bfdb;">PR 10-39</b>：低於平均</div>
+                <div style="margin-bottom: 8px;"><span style="display:inline-block; width:15px; height:15px; background-color:#4575b4; border-radius:3px; vertical-align:middle;"></span> <b style="color:#4575b4;">PR 1-9</b>：聯盟墊底</div>
+                <br>
+                <div style="margin-bottom: 8px;"><span style="display:inline-block; width:15px; height:15px; background: repeating-linear-gradient(45deg, #e0e0e0, #e0e0e0 4px, #2b2b2b 4px, #2b2b2b 8px); border-radius:3px; vertical-align:middle;"></span> <b>斜線條紋背景</b>：<br>代表打席數或投球局數尚未達到聯盟門檻，樣本過小，數據可能含有大量運氣成分。</div>
+                """, unsafe_allow_html=True)
+                st.info("💡 **球探手冊**：\n預期數據 (xStats) 是透過剔除運氣成分(BABIP)，還原球員真實擊球品質的終極指標。(三振率與防禦率等負面數據皆已自動反轉，看見紅色就是強！)")
+# ==========================================
+# --- 分頁 5：📋 賽前戰情室 (究極防護完整版) ---
+# ==========================================
+with tab5:
     st.header("📋 賽前戰情室與 AI 深度戰報")
     get_career_stats()
 
@@ -2115,9 +2371,9 @@ with tab4:
             else:
                 st.caption("目前雙方陣容中，尚無值得注意的極端連續紀錄。")
 # ==========================================
-# --- 分頁 5：🏛️ 聯盟歷史與榮耀殿堂 ---
+# --- 分頁 6：🏛️ 聯盟歷史與榮耀殿堂 ---
 # ==========================================
-with tab5:
+with tab6:
     st.header("🏛️ 聯盟歷史與榮耀殿堂 (History & Awards)")
     st.caption("結合 BBWAA 年度大獎、大聯盟歷史資料庫、里程碑追蹤與進階數據極端的終極榮耀殿堂。")
     

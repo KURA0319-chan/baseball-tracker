@@ -846,7 +846,6 @@ with tab5:
                 }
 
         if not p_sub.empty:
-            # ✨ 動態聯盟防禦率基準
             lg_ip_total = ((p_sub['局數(整數)'].sum() * 3) + p_sub['局數(出局數)'].sum()) / 3.0
             lg_era_baseline = (p_sub['自責分'].sum() * 9) / lg_ip_total if lg_ip_total > 0 else 10.60
             era_divisor = max(1.5, lg_era_baseline * 0.2)
@@ -893,7 +892,6 @@ with tab5:
     cached_players_b = get_player_list("打擊單場紀錄")
     cached_players_p = get_player_list("投手單場紀錄")
 
-    # ✨ 修正1：確保打席與局數門檻，會嚴格區分「例行賽」與「世界大賽」的場次！
     df_b_full_raw = st.session_state.get('df_b_raw', pd.DataFrame())
     prefix_eval = "" if wr_season == "十年總成績" else f"[S{wr_season.split(' ')[1]}]"
     stage_keyword = "世界大賽" if is_ws_mode else "例行賽"
@@ -908,10 +906,9 @@ with tab5:
         
     team_games_eval = b_filter_eval['賽事階段'].nunique() if not b_filter_eval.empty else 1
     
-    # ✨ 修正 1：季後賽專屬固定門檻，不再隨場次無限縮放！
     if is_ws_mode:
-        dyn_pa_limit = 3.0  # 世界大賽打席門檻固定為 3
-        dyn_ip_limit = 1.0  # 世界大賽局數門檻固定為 1.0 局 (投過一局就及格)
+        dyn_pa_limit = 3.0 
+        dyn_ip_limit = 1.0 
     else:
         dyn_pa_limit = max(1.0, team_games_eval * 1.0)
         dyn_ip_limit = max(0.1, team_games_eval * 0.33)
@@ -1158,7 +1155,6 @@ with tab5:
 
         agg = s_df.groupby('球員姓名').agg({'打席': 'sum', '四壞球': 'sum', '安打': 'sum', '二壘安打': 'sum', '三壘安打': 'sum', '全壘打': 'sum'}).reset_index()
         
-        # ✨ 升級 1：貝氏平滑穩定機制 (加上 10 個打席的聯盟平均，避免 1 席 1 保送的球員 wRC+ 暴衝)
         agg['woba_num'] = 0.69 * agg['四壞球'] + 0.88 * (agg['安打'] - agg['二壘安打'] - agg['三壘安打'] - agg['全壘打']) + 1.25 * agg['二壘安打'] + 1.59 * agg['三壘安打'] + 2.06 * agg['全壘打']
         agg['wRC+'] = (((agg['woba_num'] + 0.320 * 10) / (agg['打席'] + 10)) / 0.320 * 100).astype(int)
         
@@ -1183,7 +1179,6 @@ with tab5:
         best_9_df = agg[agg['球員姓名'].isin(best_9_names)].sort_values('wRC+', ascending=False).reset_index(drop=True)
         prefix_team = team_name.lower()
         
-        # ✨ 升級 2：現代棒球打序觀念對位 (2棒最強、4棒重砲、1棒高上壘)
         modern_mapping = {1: 2, 2: 0, 3: 4, 4: 1, 5: 3, 6: 5, 7: 6, 8: 7, 9: 8}
         
         for order_idx in range(1, 10):
@@ -1199,7 +1194,6 @@ with tab5:
             st.session_state.lineups[team_name][order_idx-1] = new_n if new_n != "未指定" else ""
             st.session_state.lineup_pos[team_name][order_idx-1] = new_p
 
-    # ✨ 修正 3：合併成單一按鈕，雙隊同步排線！
     if st.button("🤖 AI 一鍵最佳化打線 (雙隊同步 / 現代棒球觀念)", type="primary", use_container_width=True, key="btn_ai_both_tab4"):
         auto_lineup_v48("LAA")
         auto_lineup_v48("LAD")
@@ -1233,7 +1227,6 @@ with tab5:
                 stats = display_b_stats.get(team, {}).get(p, {'wRC+': 0, 'eWAR': 0, 'AVG': 0})
                 st.caption(f"📊 {prefix_str}eWAR: **{stats['eWAR']:.1f}** | {prefix_str}wRC+: **{stats['wRC+']:.0f}** | {prefix_str}AVG: {stats['AVG']:.3f}")
         
-        # ✨ 修復點：特別加上分隔線，讓投手下拉選單絕對不迷路！
         st.markdown("---")
         st.markdown(f"##### ⚾ {team} 先發投手 (SP)")
         sp_options = ["未指定"] + cached_players_p.get(team, [])
@@ -1412,6 +1405,7 @@ with tab5:
                 g_sorted = group.sort_values('時間戳記')
                 if any('勝' in str(x) for x in g_sorted[g_sorted['球隊']=='LAA']['勝敗'].values): actual_ws_winners.append("LAA")
                 elif any('勝' in str(x) for x in g_sorted[g_sorted['球隊']=='LAD']['勝敗'].values): actual_ws_winners.append("LAD")
+                else: actual_ws_winners.append("D") # ✨ 修正：將和局算入場次
                 actual_ws_stages.append(stage)
 
         laa_ws_wins_temp = actual_ws_winners.count("LAA")
@@ -1472,7 +1466,7 @@ with tab5:
         for idx, winner in enumerate(actual_ws_winners):
             g_num = idx + 1
             if winner == "LAA": cur_l += 1
-            else: cur_d += 1
+            elif winner == "LAD": cur_d += 1
             p_l, p_d = get_ws_odds_at(cur_l, cur_d)
             s_str = get_game_score_str(actual_ws_stages[idx])
             chart_data.append({"Game": f"G{g_num}", "Team": "LAA", "Prob": p_l, "Type": "實績", "Score": s_str})
@@ -1549,9 +1543,10 @@ with tab5:
                 g_sorted = group.sort_values('時間戳記')
                 if any('勝' in str(x) for x in g_sorted[g_sorted['球隊']=='LAA']['勝敗'].values): actual_rs_winners.append("LAA")
                 elif any('勝' in str(x) for x in g_sorted[g_sorted['球隊']=='LAD']['勝敗'].values): actual_rs_winners.append("LAD")
+                else: actual_rs_winners.append("D") # ✨ 修正：將和局算入場次，解決幽靈 Bug
                 actual_rs_stages.append(stage)
         
-        rs_games_played = len(actual_rs_winners)
+        rs_games_played = len(actual_rs_stages) # ✨ 修正：確保總場次是計算包含和局的所有階段數
         laa_actual_rs_wins = actual_rs_winners.count("LAA")
         lad_actual_rs_wins = actual_rs_winners.count("LAD")
         
@@ -1561,7 +1556,12 @@ with tab5:
             for g in range(games_played + 1, 11):
                 laa_home_game = (g % 2 == 1) if rs_game1_home_team == "LAA" else (g % 2 == 0)
                 exp_l += calc_true_game_prob(laa_home_game)
-            return exp_l, 10.0 - exp_l
+            
+            # ✨ 修正：考慮和局存在，LAD 的預期勝場必須用「剩餘場次分配」來算，不能直接用 10 去減
+            exp_future_l = exp_l - current_l_wins
+            exp_future_d = (10 - games_played) - exp_future_l
+            exp_d = current_d_wins + exp_future_d
+            return exp_l, exp_d
 
         chart_data = []
         cur_l, cur_d = 0, 0
@@ -1575,14 +1575,14 @@ with tab5:
         for idx, winner in enumerate(actual_rs_winners):
             g_num = idx + 1
             if winner == "LAA": cur_l += 1
-            else: cur_d += 1
+            elif winner == "LAD": cur_d += 1
             s_str = get_game_score_str(actual_rs_stages[idx])
             
             exp_l, exp_d = get_ros_expected_wins(cur_l, cur_d, g_num)
             chart_data.append({"Game": f"G{g_num}", "Team": "LAA", "Wins": exp_l, "Type": "實績", "Score": s_str})
             chart_data.append({"Game": f"G{g_num}", "Team": "LAD", "Wins": exp_d, "Type": "實績", "Score": s_str})
             
-        # 未來賽事：由於期望值的特性，未來的滾動預測線將是一條水平延伸的虛線，總和始終等於 10
+        # 未來賽事：由於期望值的特性，未來的滾動預測線將是一條水平延伸的虛線
         if rs_games_played < 10:
             chart_data.append({"Game": f"G{rs_games_played}", "Team": "LAA", "Wins": exp_l, "Type": "預測", "Score": "實績起點"})
             chart_data.append({"Game": f"G{rs_games_played}", "Team": "LAD", "Wins": exp_d, "Type": "預測", "Score": "實績起點"})
@@ -2001,11 +2001,7 @@ with tab5:
             if is_laa_home: home_str = "主場球迷的加持"
             else: home_str = "身處客場卻握有極佳的數據優勢"
 
-            # --- AI 動態比分精算模型 (3局制專屬版) ---
-            # ✨ 修改點 1：基準得分環境從 9 局的 4.5 分，等比例縮減為 3 局的 1.5 分
             run_env = 1.5
-            
-            # ✨ 修改點 2：在 3 局制中每一分價值極高！勝率每超過 50% 約 20% (原本是10%)，期望得分大約多 1 分
             power_diff = (prob_laa - 50) / 20.0
             
             exp_runs_laa = run_env + power_diff
@@ -2014,12 +2010,10 @@ with tab5:
             pred_laa = max(0, int(round(exp_runs_laa)))
             pred_lad = max(0, int(round(exp_runs_lad)))
             
-            # 棒球沒有和局，若推算出來同分，交由勝率天平 (prob_laa) 的微小優勢方打破僵局加 1 分 (完美模擬突破僵局制)
             if pred_laa == pred_lad:
                 if prob_laa >= 50: pred_laa += 1
                 else: pred_lad += 1
 
-            # 產生結合勝率與比分的終極預測字串
             if pred_laa > pred_lad:
                 prediction.append(f"🔮 **【AI 大數據終極預測】**\n「綜合今日雙方陣容火力與 **3 局制賽制環境**，模型顯示勝率天平傾向 LAA (**{prob_laa}%**)。\n👉 系統推演最可能出現的結果為：**LAA 將以 {pred_laa} : {pred_lad} 擊敗 LAD！**」")
             else:
@@ -2028,9 +2022,6 @@ with tab5:
             tactics.append(prediction[0])
             st.error("\n\n".join(tactics))
 
-            # ==========================================
-            # ✨ 戰情室特別警報 (Active Streaks Radar)
-            # ==========================================
             st.markdown("---")
             st.markdown("#### 🚨 戰情室特別警報 (Active Streaks Radar)")
             
@@ -2042,24 +2033,20 @@ with tab5:
                 for team in ['LAA', 'LAD']:
                     t_df = df_b_raw_radar[df_b_raw_radar['球隊'] == team]
                     for name, g in t_df.groupby('球員姓名', sort=False):
-                        # ✨ 核心優化 1：只對今天「有進入先發打線」的球員發出警報，板凳老鳥直接略過！
                         is_starting_today = name in (curr_laa_batters + curr_lad_batters)
                         if not is_starting_today: continue
                         
                         g_sorted = g.sort_values('時間戳記', ascending=False)
                         hit_streak, hr_streak, hitless_streak = 0, 0, 0
                         
-                        # 算連續安打場次
                         for _, r in g_sorted.iterrows():
                             if pd.to_numeric(r.get('安打', 0), errors='coerce') > 0: hit_streak += 1
                             else: break
                             
-                        # 算連續全壘打場次
                         for _, r in g_sorted.iterrows():
                             if pd.to_numeric(r.get('全壘打', 0), errors='coerce') > 0: hr_streak += 1
                             else: break
                             
-                        # 算連續無安打場次
                         for _, r in g_sorted.iterrows():
                             h = pd.to_numeric(r.get('安打', 0), errors='coerce')
                             ab = pd.to_numeric(r.get('打數', 0), errors='coerce')
@@ -2070,9 +2057,9 @@ with tab5:
                         
                         if hr_streak >= 2:
                             active_alerts.append(f"🌋 [{team}] **{name}**{playing_str} 砲火猛烈！目前已跨場 **連 {hr_streak} 場全壘打**，絕對要注意他的長打威脅！")
-                        if hit_streak >= 4: # ✨ 核心優化 2：火燙安打提高到 4 場
+                        if hit_streak >= 4: 
                             active_alerts.append(f"🔥 [{team}] **{name}**{playing_str} 手感發燙，目前正處於跨場 **連 {hit_streak} 場安打** 的狀態！")
-                        if hitless_streak >= 5: # ✨ 核心優化 3：嚴重低潮提高到 5 場
+                        if hitless_streak >= 5: 
                             active_alerts.append(f"📉 [{team}] **{name}**{playing_str} 近期陷入嚴重低潮，已經連續 **{hitless_streak} 場出賽沒有安打**，急需一棒擊沉來改運！")
 
             if not df_p_raw_radar.empty:
@@ -2084,7 +2071,6 @@ with tab5:
                     for name, g in t_df.groupby('投手姓名', sort=False):
                         g_sorted = g.sort_values('時間戳記', ascending=False)
                         
-                        # 先發無失分紀錄
                         sp_games = g_sorted[g_sorted['is_SP'] == True]
                         zr_sp_streak = 0
                         for _, r in sp_games.iterrows():
@@ -2093,7 +2079,6 @@ with tab5:
                             if er == 0 and outs > 0: zr_sp_streak += 1
                             else: break
                         
-                        # 後援無失分紀錄
                         rp_games = g_sorted[g_sorted['is_SP'] == False]
                         zr_rp_streak = 0
                         for _, r in rp_games.iterrows():
@@ -2103,7 +2088,6 @@ with tab5:
                             else: break
                             
                         if zr_sp_streak >= 2:
-                            # 只針對今天確定的先發投手發警報
                             if name in [laa_sp, lad_sp]:
                                 active_alerts.append(f"🛡️ [{team}] **{name}** ⚾(今日先發) 展現窒息式壓制力，已連續 **{zr_sp_streak} 場先發無失分**！")
                         if zr_rp_streak >= 4:

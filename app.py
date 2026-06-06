@@ -330,6 +330,8 @@ with tab2:
 # --- 分頁 3：數據總表 + 球隊戰績表 ---
 # ==========================================
 with tab3:
+    import re  # ✨ 關鍵修復：在此處獨立載入正規表達式模組，防止提前執行時報錯
+
     st.subheader("🏆 累積數據與聯盟戰績")
     
     with st.expander("💡 棒球進階數據 (Sabermetrics) 小教室 (點我展開)"):
@@ -384,13 +386,12 @@ with tab3:
                 is_exact_match = False
             else: 
                 target_prefix = f"[S{s_num}] {filter_game}"
-                is_exact_match = True # ✨ 單場賽事啟動「完全相等」模式
+                is_exact_match = True
 
     get_career_stats()
     df_b = st.session_state.get('df_b_raw', pd.DataFrame())
     df_p = st.session_state.get('df_p_raw', pd.DataFrame())
 
-    # ✨ 核心修復：防止「第1場」抓到「第10場」的精準過濾器
     def apply_filter(df, prefix, exact):
         if df.empty or not prefix: return df
         if exact: return df[df['賽事階段'].astype(str) == prefix]
@@ -408,7 +409,6 @@ with tab3:
     if not df_p.empty:
         stand_b = b_filter_df
         stand_p = p_filter_df
-    
         
         team_data = []
         for team in TEAMS:
@@ -501,14 +501,48 @@ with tab3:
     
     st.markdown("### ⚾ 打擊成績")
     if not df_b.empty:
-        curr_b = b_filter_df
+        curr_b = b_filter_df.copy()
         if curr_b.empty: st.info("查無符合條件的打擊紀錄。")
         else:
+            # ✨ eWAR 逐季動態精算 (保證與分頁四 100% 統一)
+            curr_b['Season'] = curr_b['賽事階段'].astype(str).apply(lambda x: re.search(r'\[S(\d+)\]', x).group(1) if re.search(r'\[S(\d+)\]', x) else '1')
+            player_ewar_b = {}
+            pos_adj_dict = {"C": 0.15, "SS": 0.12, "2B": 0.05, "3B": 0.05, "CF": 0.05, "LF": 0.00, "RF": 0.00, "1B": -0.05, "DH": -0.12, "PH": -0.12, "PR": -0.12}
+            
+            for s in curr_b['Season'].unique():
+                s_df = curr_b[curr_b['Season'] == s]
+                s_pa = s_df['打席'].sum()
+                s_h = s_df['安打'].sum()
+                s_bb = s_df['四壞球'].sum()
+                s_2b = s_df['二壘安打'].sum()
+                s_3b = s_df['三壘安打'].sum()
+                s_hr = s_df['全壘打'].sum()
+                s_1b = s_h - s_2b - s_3b - s_hr
+                s_lg_woba_num = 0.69 * s_bb + 0.88 * s_1b + 1.25 * s_2b + 1.59 * s_3b + 2.06 * s_hr
+                s_lg_woba = s_lg_woba_num / s_pa if s_pa > 0 else 0.001
+                
+                s_agg = s_df.groupby(['球隊', '球員姓名']).agg({
+                    '打席': 'sum', '打數': 'sum', '安打': 'sum', '二壘安打': 'sum', '三壘安打': 'sum', 
+                    '全壘打': 'sum', '四壞球': 'sum', '三振': 'sum',
+                    '守位': lambda x: x.value_counts().index[0] if '守位' in s_df.columns and not x.empty else 'DH'
+                }).reset_index()
+                
+                for _, r in s_agg.iterrows():
+                    p_1b = r['安打'] - r['二壘安打'] - r['三壘安打'] - r['全壘打']
+                    p_woba = (0.69 * r['四壞球'] + 0.88 * p_1b + 1.25 * r['二壘安打'] + 1.59 * r['三壘安打'] + 2.06 * r['全壘打']) / max(1, r['打席'])
+                    p_wrc_plus = 100 * (p_woba / s_lg_woba) if s_lg_woba > 0 else 0
+                    
+                    ewar = (((p_wrc_plus - 70) / 80) + pos_adj_dict.get(r['守位'], -0.12)) * (r['打席'] / 15)
+                    ewar = 0.0 if abs(ewar) < 0.05 else round(ewar, 1)
+                    
+                    key = (r['球隊'], r['球員姓名'])
+                    player_ewar_b[key] = player_ewar_b.get(key, 0.0) + ewar
+
+            # 合併加總顯示用數據
             agg_b = curr_b.groupby(['球隊', '球員姓名']).agg({
                 '打席': 'sum', '打數': 'sum', '安打': 'sum', '二壘安打': 'sum', '三壘安打': 'sum', 
                 '全壘打': 'sum', '打點': 'sum', '得分': 'sum', '四壞球': 'sum', '三振': 'sum', '盜壘': 'sum',
-                '賽事階段': 'count',
-                '守位': lambda x: x.value_counts().index[0] if '守位' in curr_b.columns else 'DH'
+                '賽事階段': 'count'
             }).reset_index().rename(columns={'賽事階段': '出賽數'})
             
             agg_b['一壘安打'] = agg_b['安打'] - agg_b['二壘安打'] - agg_b['三壘安打'] - agg_b['全壘打']
@@ -533,15 +567,15 @@ with tab3:
             agg_b['wOBA'] = (0.69 * agg_b['四壞球'] + 0.88 * agg_b['一壘安打'] + 1.25 * agg_b['二壘安打'] + 1.59 * agg_b['三壘安打'] + 2.06 * agg_b['全壘打']) / agg_b['打席'].replace(0, 1)
             agg_b['wRC+'] = (agg_b['wOBA'] / lg_woba * 100).fillna(0).astype(int)
             
-            agg_b['eWAR'] = agg_b.apply(lambda r: (((r['wRC+'] - 70) / 80) + POS_ADJ.get(r['守位'], 0)) * (r['打席'] / 15), axis=1)
-            agg_b['eWAR'] = agg_b['eWAR'].apply(lambda x: 0.0 if round(x, 1) == 0 else x)
+            # ✨ 帶入逐季精算後加總的統一 eWAR
+            agg_b['eWAR'] = agg_b.apply(lambda r: player_ewar_b.get((r['球隊'], r['球員姓名']), 0.0), axis=1)
+            agg_b['eWAR'] = agg_b['eWAR'].apply(lambda x: 0.0 if abs(x) < 0.05 else round(x, 1))
 
             qual_b = agg_b[agg_b['打席'] >= dyn_pa_limit]
             
             if not agg_b.empty:
                 st.markdown(f"#### 👑 聯盟打擊領先者 (規定打席: {dyn_pa_limit:.1f})")
                 
-                # ✨ MLB Tie-breaker 同步系統 (AVG需達標，計數數據看全體)
                 avg_df = qual_b[qual_b['AVG'] > 0]
                 h_df = agg_b[agg_b['安打'] > 0]
                 hr_df = agg_b[agg_b['全壘打'] > 0]
@@ -631,13 +665,43 @@ with tab3:
     
     st.markdown("### 🥎 投球成績")
     if not df_p.empty:
-        curr_p = p_filter_df
+        curr_p = p_filter_df.copy()
         if curr_p.empty: st.info("查無符合條件的投球紀錄。")
         else:
+            # ✨ eWAR 逐季動態精算 (保證與分頁四 100% 統一)
+            curr_p['Season'] = curr_p['賽事階段'].astype(str).apply(lambda x: re.search(r'\[S(\d+)\]', x).group(1) if re.search(r'\[S(\d+)\]', x) else '1')
+            player_ewar_p = {}
+            
+            for s in curr_p['Season'].unique():
+                s_df = curr_p[curr_p['Season'] == s]
+                s_outs = (s_df['局數(整數)'].sum() * 3) + s_df['局數(出局數)'].sum()
+                s_ip = s_outs / 3.0
+                s_er = s_df['自責分'].sum()
+                s_lg_era = (s_er * 9) / s_ip if s_ip > 0 else 10.60
+                s_era_div = max(1.5, s_lg_era * 0.2)
+                
+                s_agg = s_df.groupby(['球隊', '投手姓名']).agg({
+                    '局數(整數)': 'sum', '局數(出局數)': 'sum', '奪三振': 'sum', '自責分': 'sum', '四壞球': 'sum', '被全壘打': 'sum'
+                }).reset_index()
+                
+                for _, r in s_agg.iterrows():
+                    outs = (r['局數(整數)'] * 3) + r['局數(出局數)']
+                    ip = outs / 3.0
+                    era = (r['自責分'] * 9) / ip if ip > 0 else float('inf') if r['自責分'] > 0 else 0.0
+                    fip = (((13 * r['被全壘打']) + (3 * r['四壞球']) - (2 * r['奪三振'])) / ip) + 3.10 if ip > 0 else float('inf') if (13*r['被全壘打']+3*r['四壞球']-2*r['奪三振'])>0 else 3.10
+                    tra = (era + fip) / 2.0
+                    
+                    if ip == 0: ewar = -0.1 * r['自責分'] - 0.05 * r['四壞球']
+                    else: ewar = ((s_lg_era - tra) / s_era_div) * (ip / 10)
+                    
+                    ewar = 0.0 if abs(ewar) < 0.05 else round(ewar, 1)
+                    key = (r['球隊'], r['投手姓名'])
+                    player_ewar_p[key] = player_ewar_p.get(key, 0.0) + ewar
+
+            # 合併加總顯示用數據
             agg_p = curr_p.groupby(['球隊', '投手姓名']).agg({
                 '局數(整數)': 'sum', '局數(出局數)': 'sum', '打者數': 'sum', '投球數': 'sum', '被安打': 'sum', 
-                '被全壘打': 'sum', '四壞球': 'sum', '奪三振': 'sum', '失分': 'sum', '自責分': 'sum',
-                '角色': lambda x: x.value_counts().index[0] if '角色' in curr_p.columns else 'SP'
+                '被全壘打': 'sum', '四壞球': 'sum', '奪三振': 'sum', '失分': 'sum', '自責分': 'sum'
             }).reset_index()
             
             apps = curr_p.groupby(['球隊', '投手姓名']).size().reset_index(name='出賽數')
@@ -665,17 +729,16 @@ with tab3:
             agg_p['BB/9'] = ((agg_p['四壞球'] * 9) / ip_calc.replace(0, 1)).fillna(0)
             agg_p['HR/9'] = ((agg_p['被全壘打'] * 9) / ip_calc.replace(0, 1)).fillna(0)
             agg_p['K/BB'] = (agg_p['奪三振'] / agg_p['四壞球'].replace(0, 1)).fillna(agg_p['奪三振'])
-            agg_p['TRA'] = (agg_p['ERA'] + agg_p['FIP']) / 2.0
             
-            agg_p['eWAR'] = agg_p.apply(lambda r: (-0.1 * r['自責分'] - 0.05 * r['四壞球']) if r['實際局數'] == 0 else ((5.00 - r['TRA']) / 1.5) * (r['實際局數'] / 10), axis=1)
-            agg_p['eWAR'] = agg_p['eWAR'].apply(lambda x: 0.0 if round(x, 1) == 0 else x)
+            # ✨ 帶入逐季精算後加總的統一 eWAR
+            agg_p['eWAR'] = agg_p.apply(lambda r: player_ewar_p.get((r['球隊'], r['投手姓名']), 0.0), axis=1)
+            agg_p['eWAR'] = agg_p['eWAR'].apply(lambda x: 0.0 if abs(x) < 0.05 else round(x, 1))
 
             qual_p = agg_p[agg_p['實際局數'] >= dyn_ip_limit]
             
             if not agg_p.empty:
                 st.markdown(f"#### 👑 聯盟投球領先者 (規定局數: {dyn_ip_limit:.1f})")
                 
-                # ✨ MLB Tie-breaker 同步系統 (ERA需達標，計數數據看全體)
                 era_df = qual_p 
                 w_df = agg_p[agg_p['勝投'] > 0]
                 sv_df = agg_p[agg_p['救援成功'] > 0]

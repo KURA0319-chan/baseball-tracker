@@ -4928,34 +4928,35 @@ with tab5:
     df_b_clean = st.session_state.get('df_b_raw', pd.DataFrame())
     df_p_clean = st.session_state.get('df_p_raw', pd.DataFrame())
 
-    # ✨ 雲端空資料庫防呆終極護盾：強制賦予預設欄位 (徹底解決 KeyError 崩潰問題)
-    if df_b_clean.empty and len(df_b_clean.columns) == 0:
-        df_b_clean = pd.DataFrame(columns=[
-            '賽事階段', '時間戳記', '球隊', '球員姓名', '守位', '棒次', 
-            '打席', '打數', '得分', '安打', '二壘安打', '三壘安打', '全壘打', '打點', '四壞球', '三振', '盜壘', '單場MVP'
-        ])
-    if df_p_clean.empty and len(df_p_clean.columns) == 0:
-        df_p_clean = pd.DataFrame(columns=[
-            '賽事階段', '時間戳記', '球隊', '投手姓名', '勝敗', '局數(整數)', '局數(出局數)', 
-            '被安打', '失分', '自責分', '四壞球', '奪三振', '被全壘打', '投球數', '單場MVP'
-        ])
+    # ✨ 雲端空資料庫防呆終極裝甲：強制賦予完整預設欄位
+    b_cols = ['賽事階段', '時間戳記', '球隊', '球員姓名', '守位', '棒次', '打席', '打數', '得分', '安打', '二壘安打', '三壘安打', '全壘打', '打點', '四壞球', '三振', '盜壘', '單場MVP']
+    if df_b_clean.empty or len(df_b_clean.columns) == 0:
+        df_b_clean = pd.DataFrame(columns=b_cols)
+    else:
+        for c in b_cols:
+            if c not in df_b_clean.columns: df_b_clean[c] = 0
+
+    p_cols = ['賽事階段', '時間戳記', '球隊', '投手姓名', '勝敗', '局數(整數)', '局數(出局數)', '被安打', '失分', '自責分', '四壞球', '奪三振', '被全壘打', '投球數', '單場MVP']
+    if df_p_clean.empty or len(df_p_clean.columns) == 0:
+        df_p_clean = pd.DataFrame(columns=p_cols)
+    else:
+        for c in p_cols:
+            if c not in df_p_clean.columns: df_p_clean[c] = 0
 
     # 確保數值欄位安全轉換
-    if not df_b_clean.empty:
-        for c in ['安打', '全壘打', '打點', '打席', '打數', '得分', '二壘安打', '三壘安打', '盜壘', '四壞球', '三振']:
-            if c in df_b_clean.columns:
-                df_b_clean[c] = pd.to_numeric(df_b_clean[c], errors='coerce').fillna(0)
+    for c in ['打席', '打數', '得分', '安打', '二壘安打', '三壘安打', '全壘打', '打點', '四壞球', '三振', '盜壘']:
+        df_b_clean[c] = pd.to_numeric(df_b_clean[c], errors='coerce').fillna(0)
                 
-    if not df_p_clean.empty:
-        for c in ['局數(整數)', '局數(出局數)', '奪三振', '被安打', '失分', '自責分', '四壞球', '被全壘打', '投球數']:
-            if c in df_p_clean.columns:
-                df_p_clean[c] = pd.to_numeric(df_p_clean[c], errors='coerce').fillna(0)
+    for c in ['局數(整數)', '局數(出局數)', '奪三振', '被安打', '失分', '自責分', '四壞球', '被全壘打', '投球數']:
+        df_p_clean[c] = pd.to_numeric(df_p_clean[c], errors='coerce').fillna(0)
         
-        if '勝敗' in df_p_clean.columns:
-            df_p_clean['勝'] = df_p_clean['勝敗'].astype(str).apply(lambda x: 1 if '勝' in x else 0)
-            df_p_clean['救援'] = df_p_clean['勝敗'].astype(str).apply(lambda x: 1 if '救援' in x else 0)
-        else:
-            df_p_clean['勝'], df_p_clean['救援'] = 0, 0
+    if '勝敗' in df_p_clean.columns:
+        df_p_clean['勝'] = df_p_clean['勝敗'].astype(str).apply(lambda x: 1 if '勝' in x else 0)
+        df_p_clean['救援'] = df_p_clean['勝敗'].astype(str).apply(lambda x: 1 if '救援' in x else 0)
+        df_p_clean['中繼'] = df_p_clean['勝敗'].astype(str).apply(lambda x: 1 if '中繼' in x else 0)
+        df_p_clean['敗'] = df_p_clean['勝敗'].astype(str).apply(lambda x: 1 if '敗' in x else 0)
+    else:
+        df_p_clean['勝'], df_p_clean['救援'], df_p_clean['中繼'], df_p_clean['敗'] = 0, 0, 0, 0
 
     max_season = 1
     if not df_b_clean.empty:
@@ -4967,13 +4968,24 @@ with tab5:
 
     curr_s_prefix = f"[S{max_season}]"
 
-    b_saber = df_b_clean.groupby(['球隊', '球員姓名']).sum(numeric_only=True).reset_index() if not df_b_clean.empty else pd.DataFrame(columns=['球隊', '球員姓名', '安打', '全壘打', '打點'])
-    p_saber = df_p_clean.groupby(['球隊', '投手姓名']).sum(numeric_only=True).reset_index() if not df_p_clean.empty else pd.DataFrame(columns=['球隊', '投手姓名', '勝', '奪三振', '救援', '局數(整數)', '局數(出局數)'])
-    
-    if not p_saber.empty and '局數(整數)' in p_saber.columns:
-        p_saber['局數'] = (p_saber['局數(整數)']*3 + p_saber['局數(出局數)'])/3.0
+    # ✨ 產生 saber 表格時，就算空的也要帶有完整的 Sabermetrics 所需欄位
+    if not df_b_clean.empty:
+        b_saber = df_b_clean.groupby(['球隊', '球員姓名']).sum(numeric_only=True).reset_index()
     else:
-        p_saber['局數'] = 0.0
+        b_saber = pd.DataFrame(columns=['球隊', '球員姓名', '打席', '打數', '得分', '安打', '二壘安打', '三壘安打', '全壘打', '打點', '四壞球', '三振', '盜壘'])
+
+    if not df_p_clean.empty:
+        p_saber = df_p_clean.groupby(['球隊', '投手姓名']).sum(numeric_only=True).reset_index()
+    else:
+        p_saber = pd.DataFrame(columns=['球隊', '投手姓名', '勝', '敗', '救援', '中繼', '局數(整數)', '局數(出局數)', '奪三振', '被安打', '失分', '自責分', '四壞球', '被全壘打', '投球數'])
+    
+    # 防止意外的欄位遺失
+    if '打席' not in b_saber.columns: b_saber['打席'] = 0
+    if '打數' not in b_saber.columns: b_saber['打數'] = 0
+    if '局數(整數)' not in p_saber.columns: p_saber['局數(整數)'] = 0
+    if '局數(出局數)' not in p_saber.columns: p_saber['局數(出局數)'] = 0
+
+    p_saber['局數'] = (p_saber['局數(整數)'] * 3 + p_saber['局數(出局數)']) / 3.0
 
     t_awards, t_all_mlb, t_game_mvps, t_leaders, t_milestones, t_streaks, t_extremes = st.tabs([
         "🏆 賽季大獎", "🌟 最佳陣容", "🏅 歷場 MVP", "👑 歷史神主牌", "⏳ 里程碑追蹤", "💎 神聖與連勝", "🤯 單場極端榜"

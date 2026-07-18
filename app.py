@@ -4921,122 +4921,52 @@ with tab4:
 # --- 分頁 5：🏛️ 聯盟大獎與極端紀錄室 ---
 # ==========================================
 with tab5:
-    import re
-    import pandas as pd
-    import numpy as np
-    import altair as alt
+    st.header("🏛️ 聯盟大獎與極端紀錄室 (Awards & Extreme Records)")
+    st.caption("見證微型聯盟的歷史軌跡：歷屆大獎、最佳陣容、神主牌排行榜與單場極限紀錄！")
 
-    st.header("🏛️ 聯盟大獎與極端紀錄室 (Awards & Extremes)")
-    st.caption("全聯盟的賽季大獎、最佳陣容、里程碑以及單場極端紀錄。")
-    
-    df_b_full = st.session_state.get('df_b_raw', pd.DataFrame())
-    df_p_full = st.session_state.get('df_p_raw', pd.DataFrame())
-    
-    # 🛡️ 建立全數值化的純淨底層 (解決 Groupby 字串被丟棄導致算錯的致命問題)
-    df_b_clean = df_b_full.copy()
-    for col in ['打席','打數','得分','安打','二壘安打','三壘安打','全壘打','打點','四壞球','三振','盜壘']: 
-        if col in df_b_clean.columns: df_b_clean[col] = pd.to_numeric(df_b_clean[col], errors='coerce').fillna(0)
-        
-    df_p_clean = df_p_full.copy()
-    if not df_p_clean.empty:
-        df_p_clean['勝'] = df_p_clean['勝敗'].astype(str).apply(lambda x: 1 if '勝' in x else 0)
-        df_p_clean['敗'] = df_p_clean['勝敗'].astype(str).apply(lambda x: 1 if '敗' in x else 0)
-        df_p_clean['救援'] = df_p_clean['勝敗'].astype(str).apply(lambda x: 1 if '救援' in x else 0)
-        df_p_clean['中繼'] = df_p_clean['勝敗'].astype(str).apply(lambda x: 1 if '中繼' in x else 0)
-        for col in ['局數(整數)', '局數(出局數)', '奪三振', '失分', '自責分', '四壞球', '被全壘打', '投球數', '被安打']: 
-            if col in df_p_clean.columns: df_p_clean[col] = pd.to_numeric(df_p_clean[col], errors='coerce').fillna(0)
-    
-    if '賽事階段' not in df_b_clean.columns: df_b_clean['賽事階段'] = ""
-    if '賽事階段' not in df_p_clean.columns: df_p_clean['賽事階段'] = ""
-    
-    def safe_val(val):
-        try: return float(val) if pd.notna(val) else 0.0
-        except: return 0.0
-    
-    max_season = 1
-    if not df_p_clean.empty:
-        s_nums_ext = df_p_clean['賽事階段'].astype(str).str.extract(r'\[S(\d+)\]')[0].dropna().astype(int)
-        if not s_nums_ext.empty: max_season = int(s_nums_ext.max())
+    get_career_stats()
+    df_b_clean = st.session_state.get('df_b_raw', pd.DataFrame())
+    df_p_clean = st.session_state.get('df_p_raw', pd.DataFrame())
 
-    # ✨ 終極無敵：分頁五專屬主客場推演引擎 (完美處理和局與得失分差)
-    def build_tab5_home_dict(df_p, df_b, max_s):
-        h_dict = {}
-        prev_ws_loser = "LAD"
-        for s in range(1, max_s + 2):
-            # 1. 決定例行賽主場優勢 (前一年 WS 輸家)
-            rs_hfa = "LAA" if s == 1 else prev_ws_loser
-            if s > 1:
-                p_ws = df_p[df_p['賽事階段'].astype(str).str.contains(f"\\[S{s-1}\\] 世界大賽", regex=False)]
-                if not p_ws.empty:
-                    laa_ws = p_ws[p_ws['球隊']=='LAA']['勝'].sum()
-                    lad_ws = p_ws[p_ws['球隊']=='LAD']['勝'].sum()
-                    if laa_ws > lad_ws: rs_hfa = "LAD"
-                    elif lad_ws > laa_ws: rs_hfa = "LAA"
-                    else:
-                        # WS 和局或沒打完，回推看前一年例行賽戰績
-                        p_rs = df_p[df_p['賽事階段'].astype(str).str.contains(f"\\[S{s-1}\\] 例行賽", regex=False)]
-                        laa_rs = p_rs[p_rs['球隊']=='LAA']['勝'].sum()
-                        lad_rs = p_rs[p_rs['球隊']=='LAD']['勝'].sum()
-                        if laa_rs > lad_rs: rs_hfa = "LAD"
-                        elif lad_rs > laa_rs: rs_hfa = "LAA"
-                        else:
-                            # 例行賽也平手 (包含和局)，比得失分差
-                            b_rs = df_b[df_b['賽事階段'].astype(str).str.contains(f"\\[S{s-1}\\] 例行賽", regex=False)]
-                            laa_rd = b_rs[b_rs['球隊']=='LAA']['得分'].sum() - p_rs[p_rs['球隊']=='LAA']['失分'].sum()
-                            lad_rd = b_rs[b_rs['球隊']=='LAD']['得分'].sum() - p_rs[p_rs['球隊']=='LAD']['失分'].sum()
-                            rs_hfa = "LAD" if laa_rd > lad_rd else "LAA"
+    # ✨ 雲端空資料庫防呆終極護盾：強制賦予預設欄位 (徹底解決 KeyError 崩潰問題)
+    if df_b_clean.empty and len(df_b_clean.columns) == 0:
+        df_b_clean = pd.DataFrame(columns=[
+            '賽事階段', '時間戳記', '球隊', '球員姓名', '守位', '棒次', 
+            '打席', '打數', '得分', '安打', '二壘安打', '三壘安打', '全壘打', '打點', '四壞球', '三振', '盜壘', '單場MVP'
+        ])
+    if df_p_clean.empty and len(df_p_clean.columns) == 0:
+        df_p_clean = pd.DataFrame(columns=[
+            '賽事階段', '時間戳記', '球隊', '投手姓名', '勝敗', '局數(整數)', '局數(出局數)', 
+            '被安打', '失分', '自責分', '四壞球', '奪三振', '被全壘打', '投球數', '單場MVP'
+        ])
 
-            for g in range(1, 13):
-                h_tm = rs_hfa if g % 2 == 1 else ("LAD" if rs_hfa == "LAA" else "LAA")
-                h_dict[f"[S{s}] 例行賽 G{g}"] = h_tm
-                h_dict[f"[S{s}] 例行賽 第{g}場"] = h_tm
-
-            # 2. 決定世界大賽主場優勢 (今年例行賽戰績，平手比得失分差)
-            ws_hfa = "LAA"
-            c_rs_p = df_p[df_p['賽事階段'].astype(str).str.contains(f"\\[S{s}\\] 例行賽", regex=False)]
-            if not c_rs_p.empty:
-                laa_rs = c_rs_p[c_rs_p['球隊']=='LAA']['勝'].sum()
-                lad_rs = c_rs_p[c_rs_p['球隊']=='LAD']['勝'].sum()
-                if laa_rs > lad_rs: ws_hfa = "LAA"
-                elif lad_rs > laa_rs: ws_hfa = "LAD"
-                else:
-                    c_rs_b = df_b[df_b['賽事階段'].astype(str).str.contains(f"\\[S{s}\\] 例行賽", regex=False)]
-                    laa_rd = c_rs_b[c_rs_b['球隊']=='LAA']['得分'].sum() - c_rs_p[c_rs_p['球隊']=='LAA']['失分'].sum()
-                    lad_rd = c_rs_b[c_rs_b['球隊']=='LAD']['得分'].sum() - c_rs_p[c_rs_p['球隊']=='LAD']['失分'].sum()
-                    ws_hfa = "LAD" if lad_rd > laa_rd else "LAA"
-                    
-            for g in range(1, 8):
-                h_tm = ws_hfa if g in [1, 2, 6, 7] else ("LAD" if ws_hfa == "LAA" else "LAA")
-                h_dict[f"[S{s}] 世界大賽 G{g}"] = h_tm
-                h_dict[f"[S{s}] 世界大賽 第{g}場"] = h_tm
+    # 確保數值欄位安全轉換
+    if not df_b_clean.empty:
+        for c in ['安打', '全壘打', '打點', '打席', '打數', '得分', '二壘安打', '三壘安打', '盜壘', '四壞球', '三振']:
+            if c in df_b_clean.columns:
+                df_b_clean[c] = pd.to_numeric(df_b_clean[c], errors='coerce').fillna(0)
                 
-            # 3. 更新下一年起始用的 WS 輸家
-            s_ws_p = df_p[df_p['賽事階段'].astype(str).str.contains(f"\\[S{s}\\] 世界大賽", regex=False)]
-            if not s_ws_p.empty:
-                laa_ws = s_ws_p[s_ws_p['球隊']=='LAA']['勝'].sum()
-                lad_ws = s_ws_p[s_ws_p['球隊']=='LAD']['勝'].sum()
-                if laa_ws > lad_ws: prev_ws_loser = "LAD"
-                elif lad_ws > laa_ws: prev_ws_loser = "LAA"
+    if not df_p_clean.empty:
+        for c in ['局數(整數)', '局數(出局數)', '奪三振', '被安打', '失分', '自責分', '四壞球', '被全壘打', '投球數']:
+            if c in df_p_clean.columns:
+                df_p_clean[c] = pd.to_numeric(df_p_clean[c], errors='coerce').fillna(0)
+        
+        if '勝敗' in df_p_clean.columns:
+            df_p_clean['勝'] = df_p_clean['勝敗'].astype(str).apply(lambda x: 1 if '勝' in x else 0)
+            df_p_clean['救援'] = df_p_clean['勝敗'].astype(str).apply(lambda x: 1 if '救援' in x else 0)
+        else:
+            df_p_clean['勝'], df_p_clean['救援'] = 0, 0
 
-        manual_home_correction = {
-            "[S6] 世界大賽 G1": "LAD", "[S6] 世界大賽 G2": "LAD", "[S6] 世界大賽 G3": "LAA",
-            "[S6] 世界大賽 G4": "LAA", "[S6] 世界大賽 G5": "LAA", "[S6] 世界大賽 G6": "LAD", "[S6] 世界大賽 G7": "LAD",
-        }
-        h_dict.update(manual_home_correction)
-        return h_dict
-
-    tab5_home_dict = build_tab5_home_dict(df_p_clean, df_b_clean, max_season)
-    
-    def get_home_team_tab5(stage_str):
-        clean = str(stage_str).strip()
-        if clean in tab5_home_dict: return tab5_home_dict[clean]
-        for k, v in tab5_home_dict.items():
-            if k.replace(' ', '') == clean.replace(' ', ''): return v
-        return "LAA" 
+    max_season = 1
+    if not df_b_clean.empty:
+        b_s_nums = df_b_clean['賽事階段'].astype(str).str.extract(r'\[S(\d+)\]')[0].dropna().astype(int)
+        if not b_s_nums.empty: max_season = max(max_season, b_s_nums.max())
+    if not df_p_clean.empty:
+        p_s_nums = df_p_clean['賽事階段'].astype(str).str.extract(r'\[S(\d+)\]')[0].dropna().astype(int)
+        if not p_s_nums.empty: max_season = max(max_season, p_s_nums.max())
 
     curr_s_prefix = f"[S{max_season}]"
 
-    # ✨ 雲端空資料庫防呆升級：賦予空 DataFrame 預設欄位名稱骨架
     b_saber = df_b_clean.groupby(['球隊', '球員姓名']).sum(numeric_only=True).reset_index() if not df_b_clean.empty else pd.DataFrame(columns=['球隊', '球員姓名', '安打', '全壘打', '打點'])
     p_saber = df_p_clean.groupby(['球隊', '投手姓名']).sum(numeric_only=True).reset_index() if not df_p_clean.empty else pd.DataFrame(columns=['球隊', '投手姓名', '勝', '奪三振', '救援', '局數(整數)', '局數(出局數)'])
     
@@ -5044,7 +4974,7 @@ with tab5:
         p_saber['局數'] = (p_saber['局數(整數)']*3 + p_saber['局數(出局數)'])/3.0
     else:
         p_saber['局數'] = 0.0
-    
+
     t_awards, t_all_mlb, t_game_mvps, t_leaders, t_milestones, t_streaks, t_extremes = st.tabs([
         "🏆 賽季大獎", "🌟 最佳陣容", "🏅 歷場 MVP", "👑 歷史神主牌", "⏳ 里程碑追蹤", "💎 神聖與連勝", "🤯 單場極端榜"
     ])

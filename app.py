@@ -5036,10 +5036,14 @@ with tab5:
 
     curr_s_prefix = f"[S{max_season}]"
 
-    b_saber = df_b_clean.groupby(['球隊', '球員姓名']).sum(numeric_only=True).reset_index() if not df_b_clean.empty else pd.DataFrame()
-    p_saber = df_p_clean.groupby(['球隊', '投手姓名']).sum(numeric_only=True).reset_index() if not df_p_clean.empty else pd.DataFrame()
-    if not p_saber.empty:
+    # ✨ 雲端空資料庫防呆升級：賦予空 DataFrame 預設欄位名稱骨架
+    b_saber = df_b_clean.groupby(['球隊', '球員姓名']).sum(numeric_only=True).reset_index() if not df_b_clean.empty else pd.DataFrame(columns=['球隊', '球員姓名', '安打', '全壘打', '打點'])
+    p_saber = df_p_clean.groupby(['球隊', '投手姓名']).sum(numeric_only=True).reset_index() if not df_p_clean.empty else pd.DataFrame(columns=['球隊', '投手姓名', '勝', '奪三振', '救援', '局數(整數)', '局數(出局數)'])
+    
+    if not p_saber.empty and '局數(整數)' in p_saber.columns:
         p_saber['局數'] = (p_saber['局數(整數)']*3 + p_saber['局數(出局數)'])/3.0
+    else:
+        p_saber['局數'] = 0.0
     
     t_awards, t_all_mlb, t_game_mvps, t_leaders, t_milestones, t_streaks, t_extremes = st.tabs([
         "🏆 賽季大獎", "🌟 最佳陣容", "🏅 歷場 MVP", "👑 歷史神主牌", "⏳ 里程碑追蹤", "💎 神聖與連勝", "🤯 單場極端榜"

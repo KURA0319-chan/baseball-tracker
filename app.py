@@ -167,45 +167,93 @@ def generate_initials(name):
 # ==========================================
 # 2.5 🌐 全域主客場動態推演矩陣 (Global Home/Away Engine)
 # ==========================================
+get_career_stats()
 df_b_full_global = st.session_state.get('df_b_raw', pd.DataFrame())
 df_p_full_global = st.session_state.get('df_p_raw', pd.DataFrame())
 
+if '賽事階段' not in df_b_full_global.columns: df_b_full_global['賽事階段'] = ""
+if '賽事階段' not in df_p_full_global.columns: df_p_full_global['賽事階段'] = ""
+
+df_b_global_clean = df_b_full_global.copy()
+if not df_b_global_clean.empty:
+    for c in ['得分']: 
+        if c in df_b_global_clean.columns: df_b_global_clean[c] = pd.to_numeric(df_b_global_clean[c], errors='coerce').fillna(0)
+df_p_global_clean = df_p_full_global.copy()
+if not df_p_global_clean.empty:
+    df_p_global_clean['勝'] = df_p_global_clean['勝敗'].astype(str).apply(lambda x: 1 if '勝' in x else 0)
+    for c in ['失分']: 
+        if c in df_p_global_clean.columns: df_p_global_clean[c] = pd.to_numeric(df_p_global_clean[c], errors='coerce').fillna(0)
+
 global_home_dict = {}
-if not df_p_full_global.empty:
-    s_nums = df_p_full_global['賽事階段'].astype(str).str.extract(r'\[S(\d+)\]')[0].dropna().unique()
-    for s_num_str in s_nums:
-        s_num = int(s_num_str)
-        rs_hfa = "LAA"
-        if s_num > 1:
-            prev_ws = df_p_full_global[df_p_full_global['賽事階段'].astype(str).str.contains(f"\\[S{s_num-1}\\] 世界大賽", regex=False)]
-            laa_pw = sum(1 for stg, grp in prev_ws.groupby('賽事階段') if any('勝' in str(x) for x in grp[grp['球隊']=='LAA']['勝敗'].values))
-            lad_pw = sum(1 for stg, grp in prev_ws.groupby('賽事階段') if any('勝' in str(x) for x in grp[grp['球隊']=='LAD']['勝敗'].values))
-            if laa_pw > lad_pw: rs_hfa = "LAD"
-            elif lad_pw > laa_pw: rs_hfa = "LAA"
+
+for s in range(1, 12):
+    # 1. 決定例行賽主場優勢 (RS HFA：上季亞軍先 G1，所以輸家拿 RS HFA)
+    rs_hfa = "LAD" # Season 1 依照指示：LAD 先擔任 G1 主場
+    if s > 1:
+        p_prev_ws = df_p_global_clean[df_p_global_clean['賽事階段'].astype(str).str.contains(f"[S{s-1}] 世界大賽", regex=False)]
+        laa_prev_ws_w, lad_prev_ws_w = 0, 0
+        if not p_prev_ws.empty:
+            for stage, group in p_prev_ws.groupby('賽事階段'):
+                if group[group['球隊']=='LAA']['勝'].sum() > 0: laa_prev_ws_w += 1
+                if group[group['球隊']=='LAD']['勝'].sum() > 0: lad_prev_ws_w += 1
+        
+        if laa_prev_ws_w >= 4 or lad_prev_ws_w >= 4:
+            rs_hfa = "LAD" if laa_prev_ws_w >= 4 else "LAA"
+        else:
+            p_prev_rs = df_p_global_clean[df_p_global_clean['賽事階段'].astype(str).str.contains(f"[S{s-1}] 例行賽", regex=False)]
+            laa_prev_rs_w, lad_prev_rs_w = 0, 0
+            if not p_prev_rs.empty:
+                for stage, group in p_prev_rs.groupby('賽事階段'):
+                    if group[group['球隊']=='LAA']['勝'].sum() > 0: laa_prev_rs_w += 1
+                    if group[group['球隊']=='LAD']['勝'].sum() > 0: lad_prev_rs_w += 1
             
-        ws_hfa = "LAA"
-        curr_rs = df_p_full_global[df_p_full_global['賽事階段'].astype(str).str.contains(f"\\[S{s_num}\\] 例行賽", regex=False)]
-        laa_rw = sum(1 for stg, grp in curr_rs.groupby('賽事階段') if any('勝' in str(x) for x in grp[grp['球隊']=='LAA']['勝敗'].values))
-        lad_rw = sum(1 for stg, grp in curr_rs.groupby('賽事階段') if any('勝' in str(x) for x in grp[grp['球隊']=='LAD']['勝敗'].values))
-        if lad_rw > laa_rw: ws_hfa = "LAD"
-        elif lad_rw == laa_rw:
-            curr_rs_b = df_b_full_global[df_b_full_global['賽事階段'].astype(str).str.contains(f"\\[S{s_num}\\] 例行賽", regex=False)]
-            laa_runs = pd.to_numeric(curr_rs_b[curr_rs_b['球隊']=='LAA']['得分'], errors='coerce').sum() if not curr_rs_b.empty else 0
-            lad_runs = pd.to_numeric(curr_rs_b[curr_rs_b['球隊']=='LAD']['得分'], errors='coerce').sum() if not curr_rs_b.empty else 0
-            laa_ra = pd.to_numeric(curr_rs[curr_rs['球隊']=='LAA']['失分'], errors='coerce').sum() if not curr_rs.empty else 0
-            lad_ra = pd.to_numeric(curr_rs[curr_rs['球隊']=='LAD']['失分'], errors='coerce').sum() if not curr_rs.empty else 0
-            if (lad_runs - lad_ra) > (laa_runs - laa_ra): ws_hfa = "LAD"
-            
-        s_stages = df_p_full_global[df_p_full_global['賽事階段'].astype(str).str.contains(f"\\[S{s_num}\\]", regex=False)]['賽事階段'].unique()
-        for stg in s_stages:
-            m_g = re.search(r'G(\d+)', str(stg))
-            g_num = int(m_g.group(1)) if m_g else 0
-            if "例行賽" in str(stg):
-                laa_is_home = (g_num % 2 == 1) if rs_hfa == "LAA" else (g_num % 2 == 0)
+            if laa_prev_rs_w > lad_prev_rs_w: rs_hfa = "LAD" 
+            elif lad_prev_rs_w > laa_prev_rs_w: rs_hfa = "LAA"
             else:
-                laa_is_home = (g_num in [1, 2, 6, 7]) if ws_hfa == "LAA" else not (g_num in [1, 2, 6, 7])
-            global_home_dict[str(stg)] = "LAA" if laa_is_home else "LAD"
+                b_prev_rs = df_b_global_clean[df_b_global_clean['賽事階段'].astype(str).str.contains(f"[S{s-1}] 例行賽", regex=False)]
+                laa_rd, lad_rd = 0, 0
+                if not p_prev_rs.empty and not b_prev_rs.empty:
+                    laa_rd = b_prev_rs[b_prev_rs['球隊']=='LAA']['得分'].sum() - p_prev_rs[p_prev_rs['球隊']=='LAA']['失分'].sum()
+                    lad_rd = b_prev_rs[b_prev_rs['球隊']=='LAD']['得分'].sum() - p_prev_rs[p_prev_rs['球隊']=='LAD']['失分'].sum()
+                rs_hfa = "LAD" if laa_rd > lad_rd else "LAA" 
+
+    for g in range(1, 13):
+        h_tm = rs_hfa if g % 2 == 1 else ("LAD" if rs_hfa == "LAA" else "LAA")
+        global_home_dict[f"[S{s}] 例行賽 G{g}"] = h_tm
+        global_home_dict[f"[S{s}] 例行賽 第{g}場"] = h_tm
+
+    # 2. 決定世界大賽主場優勢 (WS HFA：今年例行賽冠軍拿 G1，平手比得失分差)
+    c_rs_p = df_p_global_clean[df_p_global_clean['賽事階段'].astype(str).str.contains(f"[S{s}] 例行賽", regex=False)]
+    c_rs_b = df_b_global_clean[df_b_global_clean['賽事階段'].astype(str).str.contains(f"[S{s}] 例行賽", regex=False)]
+    
+    laa_curr_w, lad_curr_w = 0, 0
+    if not c_rs_p.empty:
+        for stage, group in c_rs_p.groupby('賽事階段'):
+            if group[group['球隊']=='LAA']['勝'].sum() > 0: laa_curr_w += 1
+            if group[group['球隊']=='LAD']['勝'].sum() > 0: lad_curr_w += 1
+            
+    ws_hfa = "LAA"
+    if laa_curr_w > lad_curr_w: ws_hfa = "LAA"
+    elif lad_curr_w > laa_curr_w: ws_hfa = "LAD"
+    else:
+        laa_rd, lad_rd = 0, 0
+        if not c_rs_p.empty and not c_rs_b.empty:
+            laa_rd = c_rs_b[c_rs_b['球隊']=='LAA']['得分'].sum() - c_rs_p[c_rs_p['球隊']=='LAA']['失分'].sum()
+            lad_rd = c_rs_b[c_rs_b['球隊']=='LAD']['得分'].sum() - c_rs_p[c_rs_p['球隊']=='LAD']['失分'].sum()
+        ws_hfa = "LAA" if laa_rd >= lad_rd else "LAD" 
+        
+    for g in range(1, 8):
+        h_tm = ws_hfa if g in [1, 2, 6, 7] else ("LAD" if ws_hfa == "LAA" else "LAA")
+        global_home_dict[f"[S{s}] 世界大賽 G{g}"] = h_tm
+        global_home_dict[f"[S{s}] 世界大賽 第{g}場"] = h_tm
+
+manual_home_correction = {
+    "[S6] 世界大賽 G1": "LAD", "[S6] 世界大賽 G2": "LAD", "[S6] 世界大賽 G3": "LAA",
+    "[S6] 世界大賽 G4": "LAA", "[S6] 世界大賽 G5": "LAA", "[S6] 世界大賽 G6": "LAD", "[S6] 世界大賽 G7": "LAD",
+}
+global_home_dict.update(manual_home_correction)
 st.session_state['global_home_dict'] = global_home_dict
+
 # ==========================================
 # 3. 🏆 全域年度大獎與快取結算中心 (時空隔離引擎)
 # ==========================================
@@ -213,7 +261,23 @@ get_career_stats()
 df_b_full = st.session_state.get('df_b_raw', pd.DataFrame())
 df_p_full = st.session_state.get('df_p_raw', pd.DataFrame())
 
-# 🛡️ 確保空資料庫仍有標準欄位，防範 KeyError
+# 🩹 補丁：覆蓋全域的單場 MVP 演算法 (專為 3 局制特化，強制拉平投打分數天花板)
+def global_game_mvp_score_b(ab, h, h2, h3, hr, rbi, run, bb, so, s_idx=1):
+    try:
+        h1 = h - h2 - h3 - hr
+        score = (hr * 25) + (h3 * 15) + (h2 * 10) + (h1 * 6)
+        score += (rbi * 12) + (run * 8) + (bb * 5) - (so * 3)
+        return score
+    except: return 0
+
+def global_game_mvp_score_p(ip, er, h_allowed, bb_allowed, k, w, sv, hld, s_idx=1):
+    try:
+        score = (ip * 10) + (k * 4) + (w * 15) + (sv * 15) + (hld * 10)
+        score -= (er * 15) + (h_allowed * 3) + (bb_allowed * 3)
+        return score
+    except: return 0
+
+# 🛡️ 確保空資料庫仍有標準欄位
 required_b = ['賽事階段', '球隊', '得分', '安打', '棒次', '時間戳記', '守位', '球員姓名', '打數', '打點', '四壞球', '三振', '全壘打', '二壘安打', '三壘安打', '盜壘', '打席']
 for c in required_b:
     if c not in df_b_full.columns: df_b_full[c] = "0"
@@ -229,56 +293,9 @@ if not df_p_full.empty:
     p_seasons = df_p_full['賽事階段'].astype(str).str.extract(r'\[S(\d+)\]')[0].dropna().astype(int)
     if not p_seasons.empty: max_season = max(max_season, p_seasons.max())
 
-# --- 全自動 S1~S10 歷史與未來主客場矩陣 ---
-def build_home_dict(df_p_all, df_b_all):
-    home_dict = {}
-    prev_ws_loser = "LAD"
-    for s in range(1, 11):
-        s_pref = f"[S{s}]"
-        curr_home = prev_ws_loser
-        
-        laa_w, lad_w, laa_rs_ra, lad_rs_ra, laa_rs_r, lad_rs_r = 0, 0, 0, 0, 0, 0
-        s_p = df_p_all[df_p_all['賽事階段'].astype(str).str.contains(f"\\[S{s}\\] 例行賽", regex=False)] if not df_p_all.empty else pd.DataFrame()
-        s_b = df_b_all[df_b_all['賽事階段'].astype(str).str.contains(f"\\[S{s}\\] 例行賽", regex=False)] if not df_b_all.empty else pd.DataFrame()
-        
-        if not s_p.empty:
-            for stage, group in s_p.groupby('賽事階段'):
-                if any('勝' in str(x) for x in group[group['球隊']=='LAA']['勝敗'].values): laa_w += 1
-                if any('勝' in str(x) for x in group[group['球隊']=='LAD']['勝敗'].values): lad_w += 1
-                laa_rs_ra += pd.to_numeric(group[group['球隊']=='LAA']['失分'], errors='coerce').fillna(0).sum()
-                lad_rs_ra += pd.to_numeric(group[group['球隊']=='LAD']['失分'], errors='coerce').fillna(0).sum()
-        if not s_b.empty:
-            laa_rs_r += pd.to_numeric(s_b[s_b['球隊']=='LAA']['得分'], errors='coerce').fillna(0).sum()
-            lad_rs_r += pd.to_numeric(s_b[s_b['球隊']=='LAD']['得分'], errors='coerce').fillna(0).sum()
-            
-        if laa_w > lad_w: ws_hfa = "LAA"
-        elif lad_w > laa_w: ws_hfa = "LAD"
-        else: ws_hfa = "LAA" if (laa_rs_r - laa_rs_ra) >= (lad_rs_r - lad_rs_ra) else "LAD"
-        
-        for g_num in range(1, 11):
-            stage = f"[S{s}] 例行賽 G{g_num}"
-            home_dict[stage] = curr_home if g_num % 2 == 1 else ("LAA" if curr_home == "LAD" else "LAD")
-            
-        for g_num in range(1, 8):
-            stage = f"[S{s}] 世界大賽 G{g_num}"
-            home_dict[stage] = ws_hfa if g_num in [1, 2, 6, 7] else ("LAA" if ws_hfa == "LAD" else "LAD")
-            
-        s_ws_p = df_p_all[df_p_all['賽事階段'].astype(str).str.contains(f"\\[S{s}\\] 世界大賽", regex=False)] if not df_p_all.empty else pd.DataFrame()
-        laa_ws_w, lad_ws_w = 0, 0
-        if not s_ws_p.empty:
-            for stage, group in s_ws_p.groupby('賽事階段'):
-                if any('勝' in str(x) for x in group[group['球隊']=='LAA']['勝敗'].values): laa_ws_w += 1
-                if any('勝' in str(x) for x in group[group['球隊']=='LAD']['勝敗'].values): lad_ws_w += 1
-        if laa_ws_w >= 4: prev_ws_loser = "LAD"
-        elif lad_ws_w >= 4: prev_ws_loser = "LAA"
-        else: prev_ws_loser = "LAD"
-        
-    return home_dict
+# 🔥 核心修正：此處已徹底移除會洗掉全域主客場字典的「 global_home_dict = {} 」叛徒區塊，完美傳承 2.5 矩陣！
 
-global_home_dict = build_home_dict(df_p_full, df_b_full)
-st.session_state['global_home_dict'] = global_home_dict
-
-# ⏳ 歷史原生演算法 (Legacy Function for S1~S5)
+# ⏳ 歷史原生演算法 (Legacy Function - S1~S5 舊制時空膠囊) 
 def get_hist_awards_legacy(s_idx, df_b_full, df_p_full):
     s_prefix = f"[S{s_idx}]"
     df_b_rs = df_b_full[(df_b_full['賽事階段'].astype(str).str.contains(s_prefix, regex=False)) & (df_b_full['賽事階段'].astype(str).str.contains("例行賽", regex=False))].copy()
@@ -346,10 +363,11 @@ def get_hist_awards_legacy(s_idx, df_b_full, df_p_full):
             for _, r in p_agg.iterrows():
                 ip_c = (r['局數(整數)']*3 + r['局數(出局數)'])/3.0
                 era = (r['自責分']*9)/max(1, ip_c) if ip_c>0 else float('inf') if r['自責分'] > 0 else 0.0
-                fip = (((13*r['被全壘打'])+(3*r['四壞球'])-(2*r['奪三振']))/max(1,ip_c))+3.10 if ip_c>0 else 3.10
+                fip = (((13*r['被全壘打'])+(3*r['四壞球'])-(2*r['奪三振']))/max(1,ip_c))+3.10 if ip_c>0 else float('inf') if (13*r['被全壘打']+3*r['四壞球']-2*r['奪三振'])>0 else 3.10
                 tra = (era + fip) / 2.0
                 if ip_c == 0: ewar = (-0.1*r['自責分']-0.05*r['四壞球'])
                 else: ewar = ((lg_era_base-tra)/era_div)*(ip_c/10)
+                
                 name = f"[{r['球隊']}] {r['投手姓名']}"
                 if name in cand:
                     cand[name].update({'類型':'二刀流', 'W':r['勝'], 'SV':r['救援'], 'HLD':r['中繼'], 'ERA':era, 'K_p':r['奪三振'], 'FIP':fip, 'IP':ip_c, 'Qual': (cand[name]['Qual'] or ip_c >= min_ip)})
@@ -431,16 +449,18 @@ def get_hist_awards_legacy(s_idx, df_b_full, df_p_full):
             w_stats = cands_dict[winner_name]
             return f"{winner_name} (eWAR {w_stats.get('eWAR',0):.1f})", df_res
 
-        if is_ws: return simulate_voting_local("FMVP", qual_cands)
+        if is_ws:
+            return simulate_voting_local("FMVP", qual_cands)
         
         mvp, mvp_df = simulate_voting_local("MVP", qual_cands)
         cy, cy_df = simulate_voting_local("CyYoung", qual_cands)
         ss, ss_df = simulate_voting_local("SilverSlugger", qual_cands)
-        
         roty, roty_df = "無", pd.DataFrame()
+        
         if rookie_set is not None:
             rookie_cands = {k: v for k, v in qual_cands.items() if k in rookie_set}
-            if rookie_cands: roty, roty_df = simulate_voting_local("MVP", rookie_cands)
+            if rookie_cands: 
+                roty, roty_df = simulate_voting_local("MVP", rookie_cands)
         
         all_mlb_winners = []
         batters = {k: v for k, v in cand.items() if v['類型'] in ['打者', '二刀流']}
@@ -460,9 +480,11 @@ def get_hist_awards_legacy(s_idx, df_b_full, df_p_full):
             
         if pitchers:
             sp_cands = {k: v for k, v in pitchers.items() if v.get('Qual', False) and v['eWAR'] > 0}
-            if sp_cands: all_mlb_winners.append(max(sp_cands.items(), key=lambda x: x[1]['eWAR'])[0])
+            if sp_cands: 
+                all_mlb_winners.append(max(sp_cands.items(), key=lambda x: x[1]['eWAR'])[0])
             rp_cands = {k: v for k, v in pitchers.items() if (v.get('SV',0)>0 or v.get('HLD',0)>0) and v['eWAR'] > 0}
-            if rp_cands: all_mlb_winners.append(max(rp_cands.items(), key=lambda x: x[1]['eWAR'])[0])
+            if rp_cands: 
+                all_mlb_winners.append(max(rp_cands.items(), key=lambda x: x[1]['eWAR'])[0])
 
         return mvp, mvp_df, cy, cy_df, ss, ss_df, roty, roty_df, "無", pd.DataFrame(), cand, all_mlb_winners
 
@@ -481,8 +503,8 @@ def get_hist_awards_legacy(s_idx, df_b_full, df_p_full):
         if not past_b.empty:
             for _, r in past_b.iterrows():
                 name = f"[{r['球隊']}] {r['球員姓名']}"
-                pa_val = pd.to_numeric(r.get('打席', 0), errors='coerce')
-                past_pa[name] = past_pa.get(name, 0) + (0 if pd.isna(pa_val) else pa_val)
+                pa = pd.to_numeric(r.get('打席', 0), errors='coerce')
+                past_pa[name] = past_pa.get(name, 0) + (0 if pd.isna(pa) else pa)
         if not past_p.empty:
             for _, r in past_p.iterrows():
                 name = f"[{r['球隊']}] {r['投手姓名']}"
@@ -490,7 +512,8 @@ def get_hist_awards_legacy(s_idx, df_b_full, df_p_full):
                 o_dec = pd.to_numeric(r.get('局數(出局數)', 0), errors='coerce')
                 o_int = 0 if pd.isna(o_int) else o_int
                 o_dec = 0 if pd.isna(o_dec) else o_dec
-                past_ip[name] = past_ip.get(name, 0.0) + ((o_int * 3 + o_dec) / 3.0)
+                ip = (o_int * 3 + o_dec) / 3.0
+                past_ip[name] = past_ip.get(name, 0.0) + ip
 
         curr_b = df_b_rs.groupby(['球隊', '球員姓名']).size().reset_index()
         curr_p = df_p_rs.groupby(['球隊', '投手姓名']).size().reset_index()
@@ -499,11 +522,16 @@ def get_hist_awards_legacy(s_idx, df_b_full, df_p_full):
         if not curr_p.empty: curr_all.update([f"[{r['球隊']}] {r['投手姓名']}" for _, r in curr_p.iterrows()])
         
         for p in curr_all:
-            if past_pa.get(p, 0) <= 15 and past_ip.get(p, 0.0) <= 4.0: r_set.add(p)
+            if past_pa.get(p, 0) < 6 and past_ip.get(p, 0.0) < 2.0: 
+                r_set.add(p)
 
     mvp, mvp_df, cy, cy_df, ss, ss_df, roty, roty_df, _, _, rs_cand, all_mlb_winners = extract_and_vote(df_b_rs, df_p_rs, False, rookie_set=r_set)
-    if ws_winner_team: fmvp, fmvp_df = extract_and_vote(df_b_ws, df_p_ws, True, ws_winner_team)
-    else: fmvp, fmvp_df = "無 (尚未產生冠軍)", pd.DataFrame()
+    
+    if ws_winner_team: 
+        fmvp, fmvp_df = extract_and_vote(df_b_ws, df_p_ws, True, ws_winner_team)
+    else: 
+        fmvp, fmvp_df = "無 (尚未產生冠軍)", pd.DataFrame()
+        
     return mvp, mvp_df, cy, cy_df, ss, ss_df, roty, roty_df, fmvp, fmvp_df, rs_cand, all_mlb_winners, is_rs_finished, is_ws_finished
 
 # === 執行全局賽季快取演算 ===
@@ -525,11 +553,10 @@ for s_idx in range(1, max_season + 1):
     is_ws_fin = len(ws_stages) >= 4
 
     if s_idx < 6:
-        # S1~S5 保留時空膠囊
         mvp_w, mvp_d, cy_w, cy_d, ss_w, ss_d, ro_w, ro_d, fmvp_w, fmvp_d, r_cand, all_mlb, is_rs_f, is_ws_f = get_hist_awards_legacy(s_idx, df_b_full, df_p_full)
         season_cache[s_idx] = (mvp_w, mvp_d, cy_w, cy_d, ss_w, ss_d, ro_w, ro_d, fmvp_w, fmvp_d, r_cand, all_mlb, is_rs_f, is_ws_f)
     else:
-        # S6+ 現代進階引擎
+        # 🚀 S6+ 現代新制 
         team_games = p_rs['賽事階段'].nunique() if not p_rs.empty else 1
         req_pa = max(3.1, team_games * 1.5)
         req_ip = max(1.0, team_games * 0.4)
@@ -549,8 +576,8 @@ for s_idx in range(1, max_season + 1):
             if l_ab > 0: lg_slg = (l_h1 + 2*l_h2 + 3*l_h3 + 4*l_hr) / l_ab
 
         if not p_rs.empty:
-            for c in ['局數(整數)','局數(出局數)','被安打','四壞球','奪三振','失分','自責分','被全壘打']:
-                p_rs[c] = pd.to_numeric(p_rs.get(c, 0), errors='coerce').fillna(0)
+            for c in ['局數(整數)','局數(出局數)','被安打','四壞球','奪三振','失分','自責分','死球','被全壘打']:
+                if c in p_rs.columns: p_rs[c] = pd.to_numeric(p_rs.get(c, 0), errors='coerce').fillna(0)
             l_er = p_rs['自責分'].sum()
             l_ip = (p_rs['局數(整數)'].sum()*3 + p_rs['局數(出局數)'].sum()) / 3.0
             if l_ip > 0: lg_era_base = (l_er * 9) / l_ip
@@ -561,9 +588,9 @@ for s_idx in range(1, max_season + 1):
             last_pos_b = b_rs.sort_values('時間戳記').groupby('球員姓名')['守位'].last() if '守位' in b_rs.columns else {}
             
             for _, r in b_agg.iterrows():
-                name = r['球員姓名']
-                team = last_team_b.get(name, 'Unknown')
-                pos = last_pos_b.get(name, 'DH') if isinstance(last_pos_b, dict) else last_pos_b.get(name, 'DH')
+                name = f"[{last_team_b.get(r['球員姓名'], 'Unknown')}] {r['球員姓名']}"
+                team = last_team_b.get(r['球員姓名'], 'Unknown')
+                pos = last_pos_b.get(r['球員姓名'], 'DH') if isinstance(last_pos_b, dict) else last_pos_b.get(r['球員姓名'], 'DH')
                 pa, ab, h, h2, h3, hr, bb = r['打席'], r['打數'], r['安打'], r['二壘安打'], r['三壘安打'], r['全壘打'], r['四壞球']
                 h1 = h - h2 - h3 - hr
                 obp = (h + bb) / max(1, pa)
@@ -572,7 +599,7 @@ for s_idx in range(1, max_season + 1):
                 ops_plus = global_calc_ops_plus(obp, slg, lg_obp, lg_slg)
                 wrc_plus = global_calc_wrc_plus(woba, lg_woba)
                 ewar = global_calc_batter_ewar(wrc_plus, pos, pa)
-                rs_cand[name] = {'team': team, 'name': name, '類型':'打者', 'Pos': pos, 'eWAR': ewar, 'OPS+': ops_plus, 'wRC+': wrc_plus, 'HR': int(hr), 'RBI': int(r['打點']), 'AVG': h/max(1, ab), 'PA': int(pa), 'Qual': pa >= req_pa}
+                rs_cand[name] = {'team': team, 'name': name, '球員姓名': r['球員姓名'], '類型':'打者', 'Pos': pos, 'eWAR': ewar, 'OPS+': ops_plus, 'wRC+': wrc_plus, 'HR': int(hr), 'RBI': int(r['打點']), 'AVG': h/max(1, ab), 'PA': int(pa), 'Qual': pa >= req_pa}
 
         if not p_rs.empty:
             p_rs['勝'] = p_rs['勝敗'].astype(str).apply(lambda x: 1 if '勝' in x else 0)
@@ -580,10 +607,10 @@ for s_idx in range(1, max_season + 1):
             p_agg = p_rs.groupby('投手姓名').sum(numeric_only=True).reset_index()
             last_team_p = p_rs.sort_values('時間戳記').groupby('投手姓名')['球隊'].last()
             for _, r in p_agg.iterrows():
-                name = r['投手姓名']
-                team = last_team_p.get(name, 'Unknown')
+                name = f"[{last_team_p.get(r['投手姓名'], 'Unknown')}] {r['投手姓名']}"
+                team = last_team_p.get(r['投手姓名'], 'Unknown')
                 ip = (r['局數(整數)']*3 + r['局數(出局數)']) / 3.0
-                er, hr, bb, so, w, sv = r['自責分'], r['被全壘打'], r['四壞球'], r['奪三振'], r['勝'], r['救援']
+                er, hr, bb, so, w, sv = r['自責分'], r['開被全壘打' if '開被全壘打' in r else '被全壘打'], r['四壞球'], r['奪三振'], r['勝'], r['救援']
                 era = (er * 9) / ip if ip > 0 else 0.0
                 fip = (((13*hr) + (3*bb) - (2*so)) / ip) + 3.10 if ip > 0 else 3.10
                 ewar = global_calc_pitcher_ewar(era, fip, ip, lg_era_base, s_idx)
@@ -596,7 +623,7 @@ for s_idx in range(1, max_season + 1):
                     rs_cand[name].update({'P_eWAR': ewar, 'CYP': cyp, 'ERA': era, 'FIP': fip, 'W': w, 'SV': sv, 'K_p': so, 'IP': ip})
                     rs_cand[name]['team'] = team
                 else:
-                    rs_cand[name] = {'team': team, 'name': name, '類型':'投手', 'eWAR': ewar, 'P_eWAR': ewar, 'CYP': cyp, 'ERA': era, 'FIP': fip, 'W': w, 'SV': sv, 'K_p': so, 'IP': ip, 'Qual': ip >= req_ip}
+                    rs_cand[name] = {'team': team, 'name': name, '球員姓名': r['投手姓名'], '類型':'投手', 'eWAR': ewar, 'P_eWAR': ewar, 'CYP': cyp, 'ERA': era, 'FIP': fip, 'W': w, 'SV': sv, 'K_p': so, 'IP': ip, 'Qual': ip >= req_ip}
 
         mvp_winner, cy_winner, roty_winner, ss_winner, fmvp_winner = "無", "無", "無", "無", "無"
         mvp_df, cy_df, roty_df, ss_df, fmvp_df = pd.DataFrame(), pd.DataFrame(), pd.DataFrame(), pd.DataFrame(), pd.DataFrame()
@@ -627,21 +654,22 @@ for s_idx in range(1, max_season + 1):
                         if stats.get('ERA',99.9) == min_era and min_era < 4.0: leader_bonus += 35
                     
                     if target_award == "MVP":
-                        if s_idx >= 6:
-                            if voter == 'Traditional':
-                                if stats['類型'] in ['打者', '二刀流']: score += stats.get('OPS+', 100)*0.5 + stats.get('HR',0)*5 + stats.get('RBI',0)*5 + leader_bonus + (30 if stats.get('AVG',0)>0.300 else 0)
-                                if stats['類型'] in ['投手', '二刀流']: score += stats.get('CYP',0)*2 + stats.get('W',0)*5 + leader_bonus
-                            elif voter == 'Sabermetric':
-                                score += stats.get('eWAR',0)*100 + stats.get('wRC+',100)*0.2
-                            else:
-                                if stats['類型'] in ['打者', '二刀流']: score += stats.get('eWAR',0)*60 + stats.get('OPS+',100)*0.3 + stats.get('HR',0)*5 + leader_bonus*0.5
-                                if stats['類型'] in ['投手', '二刀流']: score += stats.get('eWAR',0)*60 + stats.get('CYP',0)*1.5 + leader_bonus*0.5
+                        if voter == 'Traditional':
+                            if stats['類型'] in ['打者', '二刀流']: score += stats.get('OPS+', 100)*0.5 + stats.get('HR',0)*20 + stats.get('RBI',0)*12 + leader_bonus + (30 if stats.get('AVG',0)>0.330 else 0)
+                            if stats['類型'] in ['投手', '二刀流']: score += stats.get('W',0)*30 + stats.get('SV',0)*25 + stats.get('K_p',0)*4 - stats.get('ERA',5)*15 + leader_bonus
+                        elif voter == 'Sabermetric':
+                            if stats['類型'] == '打者': score += stats.get('eWAR',0)*100 + stats.get('OPS+',100)*0.2
+                            if stats['類型'] == '投手': score += stats.get('P_eWAR', stats.get('eWAR',0))*130 + stats.get('CYP',0)*2
+                            if stats['類型'] == '二刀流': score += stats.get('eWAR',0)*100 + stats.get('OPS+',100)*0.1 + stats.get('CYP',0)*1
+                        else: # Balanced
+                            if stats['類型'] == '打者': score += stats.get('eWAR',0)*60 + stats.get('OPS+',100)*0.3 + stats.get('HR',0)*10 + leader_bonus*0.5
+                            if stats['類型'] == '投手': score += stats.get('P_eWAR', stats.get('eWAR',0))*80 + stats.get('W',0)*15 + stats.get('K_p',0)*2 + leader_bonus*0.5
+                            if stats['類型'] == '二刀流': score += stats.get('eWAR',0)*70 + stats.get('HR',0)*5 + stats.get('W',0)*10
                     elif target_award == "CyYoung":
                         if stats['類型'] == '打者': continue
                         if stats.get('ERA', 5) > 5.00: score -= 500 
-                        if s_idx >= 6:
-                            if voter == 'Traditional': score += stats.get('CYP',0)*3 + stats.get('W',0)*10 - stats.get('ERA',5)*10 + leader_bonus
-                            else: score += stats.get('P_eWAR',0)*60 + stats.get('CYP',0)*2 - stats.get('ERA',5)*5 + leader_bonus*0.5
+                        if voter == 'Traditional': score += stats.get('CYP',0)*3 + stats.get('W',0)*10 - stats.get('ERA',5)*10 + leader_bonus
+                        else: score += stats.get('P_eWAR',0)*60 + stats.get('CYP',0)*2 - stats.get('ERA',5)*5 + leader_bonus*0.5
                     elif target_award == "SilverSlugger":
                         if stats['類型'] == '投手': continue
                         if voter == 'Traditional': score += stats.get('HR',0)*25 + stats.get('AVG',0)*100 + leader_bonus
@@ -674,50 +702,91 @@ for s_idx in range(1, max_season + 1):
             if s_idx == 1: 
                 roty_winner, roty_df = "無 (首賽季不頒發)", pd.DataFrame()
             else:
-                past_pa, past_ip, past_seasons_cnt = {}, {}, {}
+                past_pa, past_ip, debut_season = {}, {}, {}
                 for ps in range(1, s_idx):
                     if ps in season_cache:
                         for p_name, stats in season_cache[ps][10].items():
                             clean_name = p_name.split('] ')[1] if ']' in p_name else p_name
                             past_pa[clean_name] = past_pa.get(clean_name, 0) + stats.get('PA', 0)
                             past_ip[clean_name] = past_ip.get(clean_name, 0.0) + stats.get('IP', 0.0)
-                            if stats.get('PA', 0) > 0 or stats.get('IP', 0) > 0:
-                                past_seasons_cnt[clean_name] = past_seasons_cnt.get(clean_name, 0) + 1
+                            if clean_name not in debut_season: debut_season[clean_name] = ps
                 
                 rookies = {}
                 for k, v in rs_cand.items():
                     clean_k = k.split('] ')[1] if ']' in k else k
-                    if past_pa.get(clean_k, 0) <= 15 and past_ip.get(clean_k, 0.0) <= 4.0 and past_seasons_cnt.get(clean_k, 0) <= 1:
-                        rookies[k] = v
+                    if past_pa.get(clean_k, 0) < 6 and past_ip.get(clean_k, 0.0) < 2.0:
+                        if debut_season.get(clean_k, s_idx) >= s_idx - 1:
+                            rookies[k] = v
                 roty_winner, roty_df = simulate_voting_local("MVP", rookies) if rookies else ("無符合資格球員", pd.DataFrame())
 
             valid_mvp = [x for x in rs_cand.items() if x[1].get('Qual', False)]
             all_mlb_1st = [x[0] for x in sorted(valid_mvp, key=lambda x: x[1]['eWAR'], reverse=True)[:9]]
 
-        if is_ws_fin and not b_ws.empty:
-            ws_cand = {}
-            b_ws_agg = b_ws.groupby(['球隊', '球員姓名']).sum(numeric_only=True).reset_index()
-            for _, r in b_ws_agg.iterrows():
-                name = r['球員姓名']
-                ws_cand[name] = {'類型':'打者', 'HR': r.get('全壘打',0), 'RBI': r.get('打點',0), 'eWAR': r.get('全壘打',0)*0.2, 'Qual': True}
+        def safe_val(val):
+            try: return float(val) if pd.notna(val) else 0.0
+            except: return 0.0
+
+        if not b_ws.empty or not p_ws.empty:
+            ws_winner_team = None
+            laa_ws_w, lad_ws_w = 0, 0
             if not p_ws.empty:
-                p_ws['勝'] = p_ws['勝敗'].astype(str).apply(lambda x: 1 if '勝' in x else 0)
-                p_ws_agg = p_ws.groupby(['球隊', '投手姓名']).sum(numeric_only=True).reset_index()
-                for _, r in p_ws_agg.iterrows():
-                    name = r['投手姓名']
-                    ip = (r.get('局數(整數)',0)*3 + r.get('局數(出局數)',0)) / 3.0
-                    if name not in ws_cand: ws_cand[name] = {'類型':'投手', 'eWAR': 0, 'Qual': True}
-                    ws_cand[name].update({'W': r.get('勝',0), 'SV': r.get('救援',0), 'K_p': r.get('奪三振',0), 'ERA': (r.get('自責分',0)*9)/ip if ip>0 else 9.99})
+                for stg, grp in p_ws.groupby('賽事階段'):
+                    if any('勝' in str(x) for x in grp[grp['球隊']=='LAA']['勝敗'].values): laa_ws_w += 1
+                    if any('勝' in str(x) for x in grp[grp['球隊']=='LAD']['勝敗'].values): lad_ws_w += 1
+            if laa_ws_w >= 4: ws_winner_team = "LAA"
+            elif lad_ws_w >= 4: ws_winner_team = "LAD"
+
+            ws_cand = {}
+            if not b_ws.empty:
+                b_ws_c = b_ws.copy()
+                for c in ['安打', '全壘打', '打點', '得分', '四壞球']:
+                    if c in b_ws_c.columns: b_ws_c[c] = pd.to_numeric(b_ws_c[c], errors='coerce').fillna(0)
+                b_ws_agg = b_ws_c.groupby(['球隊', '球員姓名']).sum(numeric_only=True).reset_index()
+                for _, r in b_ws_agg.iterrows():
+                    name = f"[{r['球隊']}] {r['球員姓名']}"
+                    b_score = r.get('全壘打',0)*40 + r.get('打點',0)*20 + r.get('安打',0)*15 + r.get('得分',0)*10 + r.get('四壞球',0)*5
+                    ws_cand[name] = {'類型':'打者', 'score': b_score}
             
-            fmvp_s = sorted(ws_cand.items(), key=lambda x: x[1].get('HR',0)*40 + x[1].get('RBI',0)*20 + x[1].get('W',0)*30 + x[1].get('SV',0)*30, reverse=True)
+            if not p_ws.empty:
+                p_ws_c = p_ws.copy()
+                p_ws_c['勝'] = p_ws_c['勝敗'].astype(str).apply(lambda x: 1 if '勝' in x else 0)
+                p_ws_c['救援'] = p_ws_c['勝敗'].astype(str).apply(lambda x: 1 if '救援' in x else 0)
+                p_ws_c['中繼'] = p_ws_c['勝敗'].astype(str).apply(lambda x: 1 if '中繼' in x else 0)
+                for c in ['局數(整數)', '局數(出局數)', '自責分', '被安打', '四壞球', '奪三振', '被全壘打']:
+                    if c in p_ws_c.columns: p_ws_c[c] = pd.to_numeric(p_ws_c[c], errors='coerce').fillna(0)
+                p_ws_agg = p_ws_c.groupby(['球隊', '投手姓名']).sum(numeric_only=True).reset_index()
+                for _, r in p_ws_agg.iterrows():
+                    name = f"[{r['球隊']}] {r['投手姓名']}"
+                    ip = (r.get('局數(整數)',0)*3 + r.get('局數(出局數)',0)) / 3.0
+                    p_score = r.get('勝',0)*45 + r.get('救援',0)*35 + r.get('中繼',0)*20 + (ip * 3)*15 + (r.get('奪三振',0) * 3)*3 - r.get('自責分',0)*15 - r.get('被全壘打',0)*10
+                    
+                    if name in ws_cand:
+                        ws_cand[name]['類型'] = '二刀流'
+                        ws_cand[name]['score'] += p_score
+                    else:
+                        ws_cand[name] = {'類型':'投手', 'score': p_score}
+            
+            fmvp_s = sorted(ws_cand.items(), key=lambda x: x[1]['score'], reverse=True)
+            if ws_winner_team:
+                fmvp_s = [x for x in fmvp_s if f"[{ws_winner_team}]" in x[0]]
+
             if fmvp_s:
-                fmvp_df = pd.DataFrame([{'球員': k, 'WS貢獻積分': v.get('HR',0)*40 + v.get('RBI',0)*20 + v.get('W',0)*30 + v.get('SV',0)*30, '第一名選票': (7 if i==0 else 0), '總積分': (50 if i==0 else max(0, 30-i*10))} for i, (k,v) in enumerate(fmvp_s[:3])])
+                fmvp_df = pd.DataFrame([
+                    {
+                        '球員': k, 
+                        'WS貢獻積分': v['score'], 
+                        '第一名選票': 30 if i==0 else 0, 
+                        '第二名選票': 20 if i==1 else 0,
+                        '第三名選票': 10 if i==2 else 0,
+                        '總積分': 100 if i==0 else (60 if i==1 else 30)
+                    } for i, (k,v) in enumerate(fmvp_s[:5])
+                ])
                 fmvp_winner = fmvp_s[0][0]
+                if not ws_winner_team: fmvp_winner += " (領跑中)"
             else: fmvp_winner, fmvp_df = "無", pd.DataFrame()
-        elif not is_ws_fin: fmvp_winner = "尚未產生"
+        else: fmvp_winner, fmvp_df = "尚未產生", pd.DataFrame()
 
         season_cache[s_idx] = (mvp_winner, mvp_df, cy_winner, cy_df, ss_winner, ss_df, roty_winner, roty_df, fmvp_winner, fmvp_df, rs_cand, all_mlb_1st, is_rs_fin, is_ws_fin)
-
 # ==========================================
 # 4. 宣告頂部分頁導覽列 (Tabs)
 # ==========================================
@@ -747,10 +816,10 @@ with tab1:
         if len(parts) >= 2: return (parts[0][0] + parts[-1][0]).upper()
         return str(name)[:2].upper()
 
-    # 👇 補上這個打擊率格式化小工具 👇
     def fmt_rate_t1(val):
         if val >= 1: return f"{val:.3f}"
         return f"{val:.3f}".lstrip('0')
+        
     st.title("⚾ 洛杉磯雙雄數據追蹤系統 V51 (官方數據控制中心)")
     st.caption("即時提煉底層 1200+ 筆數據，自動生成聯盟最高榮譽排行榜與奪冠機率預測。")
 
@@ -778,7 +847,6 @@ with tab1:
     curr_s_int = int(curr_s_num)
     wr_season = h_season
     
-    # ✨ 徹底移除導致資料遺失的反斜線，回歸正常的 "[S5]" 搜尋
     df_b_s = df_b_raw[df_b_raw['賽事階段'].astype(str).str.contains(f"[S{curr_s_num}]", regex=False)] if not df_b_raw.empty else pd.DataFrame(columns=required_b)
     df_p_s = df_p_raw[df_p_raw['賽事階段'].astype(str).str.contains(f"[S{curr_s_num}]", regex=False)] if not df_p_raw.empty else pd.DataFrame(columns=required_p)
 
@@ -860,7 +928,6 @@ with tab1:
                             if '救援' in str(r['勝敗']): sv_name = r['投手姓名']
                         sv_str = f" | SV: {sv_name}" if sv_name else ""
                         
-                        # ✨ 獲勝方金黃色粗體特化標記
                         away_score_style = "color:#ffcc00; font-weight:900; font-size:18px;" if away_r > home_r else "font-weight:bold; font-size:16px;"
                         home_score_style = "color:#ffcc00; font-weight:900; font-size:18px;" if home_r > away_r else "font-weight:bold; font-size:16px;"
                         
@@ -881,7 +948,6 @@ with tab1:
                         next_starters = {"LAA": "未指定", "LAD": "未指定"}
                         for t_key in ["LAA", "LAD"]:
                             stg_keyword_auto = "世界大賽" if "世界大賽" in g_name else "例行賽"
-                            # 確保搜尋時也沒有反斜線
                             t_df_auto = df_p_raw[(df_p_raw['球隊'] == t_key) & (df_p_raw['賽事階段'].astype(str).str.contains(f"[S{curr_s_num}] {stg_keyword_auto}", regex=False))]
                             starters_played = []
                             if not t_df_auto.empty:
@@ -1083,6 +1149,27 @@ with tab1:
                 
         if has_matchup: st.markdown("<br>", unsafe_allow_html=True)
         else: st.info("尚無足夠賽程資料產生焦點對決。")
+        
+        # ✨ 季後賽牛棚出賽警告復原
+        if is_ws_mode and not is_season_over:
+            st.markdown("<br>", unsafe_allow_html=True)
+            bullpen_warnings = []
+            rp_c = df_p_s[df_p_s['賽事階段'].astype(str).str.contains("世界大賽", regex=False)].copy()
+            if not rp_c.empty:
+                rp_c['g_idx'] = rp_c.groupby(['球隊', '賽事階段']).cumcount()
+                rp_only = rp_c[rp_c['g_idx'] > 0]
+                ws_stg_sort = sorted(list(rp_only['賽事階段'].unique()))
+                if len(ws_stg_sort) >= 2:
+                    last_2_stgs = ws_stg_sort[-2:]
+                    for tm in ['LAA', 'LAD']:
+                        tm_rp = rp_only[rp_only['球隊'] == tm]
+                        recent_rps = tm_rp[tm_rp['賽事階段'].isin(last_2_stgs)]['投手姓名'].value_counts()
+                        overworked = recent_rps[recent_rps >= 2].index.tolist()
+                        if overworked:
+                            for rp in overworked: bullpen_warnings.append(f"[{tm}] {rp} 已連兩場登板。")
+            if bullpen_warnings:
+                warn_text = "，".join(bullpen_warnings)
+                st.warning(f"⚠️ **牛棚過勞警戒**：{warn_text}")
     else:
         st.info("尚無足夠賽程資料產生焦點對決。")
 
@@ -1275,7 +1362,6 @@ with tab1:
                     laa_home_this_game = True if global_home_dict.get(stg_sim) == 'LAA' else False
                     if random.random() < calc_true_game_prob_t1(laa_home_this_game):
                         l_w += 1
-                        # ✨ 動態隨機比分差演算法
                         sim_margin = random.randint(1, 5)
                         l_rd_sim += sim_margin 
                         d_rd_sim -= sim_margin
@@ -1321,12 +1407,11 @@ with tab1:
     col_main_left, col_main_right = st.columns([1, 1])
 
     # =======================================================
-    # 🏆 區塊四：大獎競逐預測中心 (✨ 隨時切換 MVP / FMVP)
+    # 🏆 區塊四：大獎競逐預測中心 (✨ 對齊 3 局特化新制)
     # =======================================================
     with col_main_left:
         st.subheader("🏆 大獎競逐預測中心 (Award Race Radar)")
         
-        # ✨ 新增的切換開關
         mvp_view_sel = st.radio(
             "切換預測榜單", 
             ["🏆 例行賽 MVP (BBWAA 票選)", "🌟 世界大賽 FMVP (短期爆發)"], 
@@ -1339,8 +1424,12 @@ with tab1:
         if is_fmvp_view:
             st.caption("目前顯示：世界大賽最有價值球員 (FMVP) 評估模式！機率將與球隊奪冠機率同步連動。")
         else:
-            st.caption("目前顯示：模擬全美棒球記者協會 (BBWAA) 依照 S6 現代魔球標準進行的 MVP 投票推演。")
+            st.caption("目前顯示：模擬全美棒球記者協會 (BBWAA) 依照現代魔球標準進行的 MVP 投票推演。")
         
+        def safe_val(val):
+            try: return float(val) if pd.notna(val) else 0.0
+            except: return 0.0
+
         def compute_mvp_t1(stages_list, is_fmvp=False):
             if not stages_list: return {}
             b_df = df_b_raw[df_b_raw['賽事階段'].isin(stages_list)].copy()
@@ -1353,13 +1442,8 @@ with tab1:
                 if col in p_df.columns: p_df[col] = pd.to_numeric(p_df[col], errors='coerce').fillna(0)
             
             team_games = len(stages_list)
-            
-            if curr_s_int < 6 and not is_fmvp:
-                req_pa = 15.0
-                req_ip = 5.0
-            else:
-                req_pa = max(3.1, team_games * 1.5)
-                req_ip = max(1.0, team_games * 0.4)
+            req_pa = max(3.1, team_games * 1.5) if curr_s_int >= 6 else 15.0
+            req_ip = max(1.0, team_games * 0.4) if curr_s_int >= 6 else 5.0
 
             if is_fmvp:
                 cand_fmvp = {}
@@ -1368,19 +1452,24 @@ with tab1:
                     last_team_b = b_df.sort_values('時間戳記').groupby('球員姓名')['球隊'].last()
                     for _, r in b_agg.iterrows():
                         name = r['球員姓名']
-                        score = r.get('全壘打',0)*40 + r.get('打點',0)*20 + r.get('得分',0)*10 + r.get('安打',0)*10
+                        # ✨ FMVP 對齊：打者火力常態化權重
+                        score = safe_val(r.get('全壘打',0))*40 + safe_val(r.get('打點',0))*20 + safe_val(r.get('安打',0))*15 + safe_val(r.get('得分',0))*10 + safe_val(r.get('四壞球',0))*5
                         cand_fmvp[name] = {'team': last_team_b.get(name, 'Unknown'), 'name': name, 'score': score}
                 
                 if not p_df.empty:
                     p_df_c = p_df.copy()
                     p_df_c['勝'] = p_df_c['勝敗'].astype(str).apply(lambda x: 1 if '勝' in x else 0)
                     p_df_c['救援'] = p_df_c['勝敗'].astype(str).apply(lambda x: 1 if '救援' in x else 0)
+                    p_df_c['中繼'] = p_df_c['勝敗'].astype(str).apply(lambda x: 1 if '中繼' in x else 0)
                     p_agg = p_df_c.groupby('投手姓名').sum(numeric_only=True).reset_index()
                     last_team_p = p_df_c.sort_values('時間戳記').groupby('投手姓名')['球隊'].last()
                     for _, r in p_agg.iterrows():
                         name = r['投手姓名']
-                        ip = (r['局數(整數)']*3 + r['局數(出局數)'])/3.0
-                        score = r.get('勝',0)*30 + r.get('救援',0)*30 + ip*5 - r.get('自責分',0)*15 + r.get('奪三振',0)*2
+                        ip = (safe_val(r.get('局數(整數)',0))*3 + safe_val(r.get('局數(出局數)',0)))/3.0
+                        
+                        # ✨ FMVP 對齊：3局特化版投手公式
+                        score = safe_val(r.get('勝',0))*45 + safe_val(r.get('救援',0))*35 + safe_val(r.get('中繼',0))*20 + (ip * 3)*15 + (safe_val(r.get('奪三振',0)) * 3)*3 - safe_val(r.get('自責分',0))*15 - safe_val(r.get('被全壘打',0))*10
+                        
                         if name in cand_fmvp:
                             cand_fmvp[name]['score'] += score
                             cand_fmvp[name]['team'] = last_team_p.get(name, 'Unknown')
@@ -1453,7 +1542,7 @@ with tab1:
                     
                     ip_c = (r['局數(整數)']*3 + r['局數(出局數)'])/3.0
                     era = (r['自責分']*9)/max(1, ip_c) if ip_c > 0 else float('inf') if r['自責分'] > 0 else 0.0
-                    fip = (((13*r['開被全壘打' if '開被全壘打' in r else '被全壘打'])+(3*r['四壞球'])-(2*r['奪三振']))/max(1,ip_c))+3.10 if ip_c > 0 else 3.10
+                    fip = (((13*r['被全壘打' if '被全壘打' in r else '開被全壘打'])+(3*r['四壞球'])-(2*r['奪三振']))/max(1,ip_c))+3.10 if ip_c > 0 else 3.10
                     
                     if curr_s_int < 6:
                         tra = (era + fip) / 2.0
@@ -1492,14 +1581,18 @@ with tab1:
                     if stats.get('K_p',0) == leaders['K_p'] and leaders['K_p'] > 0: leader_bonus += 20
                     
                     if curr_s_int >= 6:
+                        # ✨ MVP 對齊：3局特化版大獎推演權重
                         if voter == 'Traditional':
-                            if stats['type'] in ['打者', '二刀流']: score += stats.get('OPS+', 100)*0.5 + stats.get('HR',0)*5 + stats.get('RBI',0)*5 + leader_bonus + (30 if stats.get('AVG',0)>0.300 else 0)
-                            if stats['type'] in ['投手', '二刀流']: score += stats.get('CYP',0)*2 + stats.get('W',0)*5 + leader_bonus
+                            if stats['type'] in ['打者', '二刀流']: score += stats.get('OPS+', 100)*0.5 + stats.get('HR',0)*20 + stats.get('RBI',0)*12 + leader_bonus + (30 if stats.get('AVG',0)>0.330 else 0)
+                            if stats['type'] in ['投手', '二刀流']: score += stats.get('W',0)*30 + stats.get('SV',0)*25 + stats.get('K_p',0)*4 - stats.get('ERA',5)*15 + leader_bonus
                         elif voter == 'Sabermetric': 
-                            score += stats.get('eWAR',0)*100 + stats.get('OPS+',100)*0.2
+                            if stats['type'] == '打者': score += stats.get('eWAR',0)*100 + stats.get('OPS+',100)*0.2
+                            if stats['type'] == '投手': score += stats.get('eWAR',0)*130 + stats.get('CYP',0)*2
+                            if stats['type'] == '二刀流': score += stats.get('eWAR',0)*100 + stats.get('OPS+',100)*0.1 + stats.get('CYP',0)*1
                         else: 
-                            if stats['type'] in ['打者', '二刀流']: score += stats.get('eWAR',0)*60 + stats.get('OPS+',100)*0.3 + stats.get('HR',0)*5 + leader_bonus*0.5
-                            if stats['type'] in ['投手', '二刀流']: score += stats.get('eWAR',0)*60 + stats.get('CYP',0)*1.5 + leader_bonus*0.5
+                            if stats['type'] == '打者': score += stats.get('eWAR',0)*60 + stats.get('OPS+',100)*0.3 + stats.get('HR',0)*10 + leader_bonus*0.5
+                            if stats['type'] == '投手': score += stats.get('eWAR',0)*80 + stats.get('W',0)*15 + stats.get('K_p',0)*2 + leader_bonus*0.5
+                            if stats['type'] == '二刀流': score += stats.get('eWAR',0)*70 + stats.get('HR',0)*5 + stats.get('W',0)*10
                     else:
                         if voter == 'Traditional':
                             if stats['type'] in ['打者', '二刀流']: score += stats.get('HR',0)*20 + stats.get('RBI',0)*10 + leader_bonus + (20 if stats.get('AVG',0)>0.300 else -30 if stats.get('AVG',0)<0.250 else 0)
@@ -1556,16 +1649,16 @@ with tab1:
                     <div style='display:flex; justify-content:space-between; align-items:center; padding:10px 0; border-bottom:1px solid #2a2a2a;'>
                         <div style='display:flex; align-items:center;'>
                             <span style='font-size:20px; margin-right:10px;'>{medals[rank_idx]}</span>{rank_html}
-                            <span style='background-color:{c_badge}; color:white; font-size:10px; font-weight:bold; padding:2px 6px; border-radius:4px; margin:left:10px; margin-right:10px;'>{tm_chk}</span>
+                            <span style='background-color:{c_badge}; color:white; font-size:10px; font-weight:bold; padding:2px 6px; border-radius:4px; margin-left:10px; margin-right:10px;'>{tm_chk}</span>
                             <span style='font-size:15px; font-weight:bold;'>{p_name_only}</span>
                         </div>
                         <span style='font-size:14px; font-weight:bold; color:#D4AF37;'>{v_data['Prob']:.1f}% 奪獎機率{prob_html}</span>
                     </div>
                     """, unsafe_allow_html=True)
                 st.caption(f"機率會隨{'世界大賽' if is_fmvp_view else '例行賽'}進度產生 Softmax 滾動集中效應。")
-            else: st.caption("暫無完賽紀錄可供 BBWAA 精算大獎機率。")
+            else: st.caption(f"暫無賽事紀錄可供 BBWAA 精算{' FMVP ' if is_fmvp_view else ' MVP '}機率。")
 
-# =======================================================
+    # =======================================================
     # 🔥 區塊五：近期火燙榜 (跨隊伍合併計算 - 動態場次版)
     # =======================================================
     with col_main_right:
@@ -1584,12 +1677,11 @@ with tab1:
             best_ops = 0
             best_data = {}
             
-            # ✨ 動態偵測 3 到 7 場，抓出該球員最具爆發力的高光區間
             max_n = min(7, len(g_sorted))
             for n in range(3, max_n + 1):
                 g_recent = g_sorted.head(n)
                 pa = safe_sum_t1(g_recent, '打席')
-                if pa < 4: continue # 需滿足最低打席門檻
+                if pa < 4: continue 
                 
                 ab = safe_sum_t1(g_recent, '打數')
                 h = safe_sum_t1(g_recent, '安打')
@@ -1603,7 +1695,6 @@ with tab1:
                 slg = (h - h2 - h3 - hr + 2*h2 + 3*h3 + 4*hr) / ab if ab > 0 else 0
                 ops = obp + slg
                 
-                # 火燙標準：OPS破0.850，或是開兩轟，或是每場幾乎都有安打
                 if ops >= 0.850 or hr >= 2 or h >= n:
                     if ops >= best_ops:
                         best_n = n
@@ -1622,17 +1713,12 @@ with tab1:
             for hot_plr in recent_hot_b:
                 tm_color = "#BA0021" if hot_plr['Team'] == "LAA" else "#005A9C"
                 
-                # ✨ 動態隱藏 0轟 0打點的尷尬文案
                 hr_val = int(hot_plr['HR'])
                 rbi_val = int(hot_plr['RBI'])
-                if hr_val > 0 and rbi_val > 0:
-                    extra_desc = f"，包含 <b>{hr_val}</b> 轟 <b>{rbi_val}</b> 打點"
-                elif hr_val > 0:
-                    extra_desc = f"，包含 <b>{hr_val}</b> 轟"
-                elif rbi_val > 0:
-                    extra_desc = f"，貢獻 <b>{rbi_val}</b> 打點"
-                else:
-                    extra_desc = ""
+                if hr_val > 0 and rbi_val > 0: extra_desc = f"，包含 <b>{hr_val}</b> 轟 <b>{rbi_val}</b> 打點"
+                elif hr_val > 0: extra_desc = f"，包含 <b>{hr_val}</b> 轟"
+                elif rbi_val > 0: extra_desc = f"，貢獻 <b>{rbi_val}</b> 打點"
+                else: extra_desc = ""
                     
                 st.markdown(f"""
                 <div style='background-color:#1a1a1a; padding:12px; border-radius:8px; border-left: 4px solid {tm_color}; box-shadow: 0 2px 4px rgba(0,0,0,0.3); margin-bottom: 10px;'>
@@ -1648,6 +1734,7 @@ with tab1:
                 """, unsafe_allow_html=True)
                 if_hot_any = True
         if not if_hot_any: st.info("近期賽程中，兩隊暫無極端火燙的表現。")
+
     # =======================================================
     # 👑 區塊六：聯盟數據領跑者 (跨隊伍合併計算)
     # =======================================================
@@ -1786,7 +1873,7 @@ with tab1:
             ip_calc = (row['局數(整數)'] * 3 + row['局數(出局數)']) / 3.0
             if ip_calc >= dyn_ip_limit:
                 era = (row['自責分'] * 9) / ip_calc if ip_calc > 0 else 0.0
-                fip = (((13 * row['幕被全壘打' if '幕被全壘打' in row else '被全壘打']) + (3 * row['四壞球']) - (2 * row['奪三振'])) / ip_calc) + 3.10 if ip_calc > 0 else 3.10
+                fip = (((13 * row['被全壘打']) + (3 * row['四壞球']) - (2 * row['奪三振'])) / ip_calc) + 3.10 if ip_calc > 0 else 3.10
                 p_quad_list.append({
                     '投手姓名': name, '球隊': team, 'ERA': era,
                     'FIP': fip, 'IP': ip_calc, '縮寫': generate_initials(name)
@@ -3237,47 +3324,44 @@ with tab2:
 with tab3:
     import re
     import altair as alt
+    import pandas as pd
+    import numpy as np
 
     st.subheader("🏆 累積數據與聯盟戰績")
     
-    with st.expander("💡 棒球進階數據 (Sabermetrics) 深度解析小教室 (點我展開)"):
+    with st.expander("💡 棒球進階數據 (Sabermetrics) 與 BR 格式深度解析小教室 (點我展開)"):
         st.markdown("""
-        **【指標基底宣告】**：本系統所有進階數據（wRC+、FIP 等）皆**非**套用現實大聯盟固定常數，而是「**以本微型聯盟當下所有賽事的整體環境**」做為聯盟平均基準動態精算，真實反映該球員在「此時空」的絕對壓制力與貢獻度。
+        **【指標基底宣告】**：本系統進階數據皆「**以本微型聯盟當下賽事的整體環境**」做為聯盟平均基準動態精算，真實反映球員的絕對壓制力與貢獻度。
 
-        * **WAR (勝場貢獻值)：** 衡量一名球員「比替補多替球隊拿幾勝」。本系統特製 **eWAR** 透過 wRC+、FIP 以及 **守位加權紅利** 綜合精算而成，是評斷球員價值的最終依據。
-        * **wRC+ (加權創造得分)：** 衡量打者整體攻擊火力的最精準指標。✨ **100 為本聯盟平均**。150 代表火力比本聯盟平均高出 50%；若打擊表現極度掙扎（如大量被三振且無安打），**數值將真實呈現為負數**，精準反映進攻斷層。
-        * **wOBA (加權上壘率)：** 捨棄傳統上壘率將所有上壘一視同仁的盲點，依照一壘安打、長打與保送的「實際得分期望值」給予不同權重。
-        * **ISO (純長打率)：** 公式為 `長打率(SLG) - 打擊率(AVG)`。只評估打者真正的長打火力，> 0.200 即為重砲手。
-        * **BABIP (場內安打率)：** 剔除全壘打與三振後的安打率。數值異常高代表強運；異常低則代表被對手佈陣針對、擊球仰角不佳或運氣極差。
-        * **FIP (獨立防禦率)：** 剔除守備與運氣成分，純看投手「能自己掌握的」三振、保送與被全壘打，反映投手真正的壓制力。
-        * **HR/9 (每九局被全壘打)：** 投手飛球控制力的指標，數值越低代表球威越重或越能製造滾地球。
-        * **P/BF (每打席用球數)：** 投手效率與纏鬥指標。**3.5球以下**為極致省球的大師，**4.2球以上**代表經常陷入滿球數纏鬥，容易提早耗盡體力。
-        * **WHIP (每局被上壘率)：** < **1.20** 就算是非常優秀的王牌投手。
+        * **WAR (eWAR)：** 預期勝場貢獻值。衡量一名球員「比替補多替球隊拿幾勝」，是評斷球員價值的最終依據。
+        * **rOBA+ (原 wRC+)：** 加權創造得分。✨ **100 為本聯盟平均**。150 代表火力高出平均 50%；若打擊極度掙扎將真實呈現為負數。
+        * **OPS+：** 標準化攻擊指數。將球員的 OBP 與 SLG 除以聯盟平均後的綜合指標，100 為平均。
+        * **TB (Total Bases)：** 壘打數。1B + 2×2B + 3×3B + 4×HR。
+        * **ISO (純長打率)：** 公式為 `SLG - BA`。只評估打者真正的長打火力。
+        * **BAbip：** 剔除全壘打與三振後的場內安打率。數值異常高代表強運；異常低則代表被對手針對或運氣極差。
+        * **ERA+：** 標準化防禦率。公式為 `100 × (聯盟防禦率 / 該投手防禦率)`。150 代表防禦率比聯盟好 50%。
+        * **FIP (獨立防禦率)：** 剔除守備與運氣成分，純看投手「能自己掌握的」三振、保送與挨轟，反映真實硬實力。
+        * **GS (Games Started)：** 先發場次。
+        * **H9 / HR9 / BB9 / SO9：** 投手每九局平均被安打、被全壘打、保送與三振數。
+        * **SO/BB：** 三振保送比。投手控球與解決打者能力的絕佳指標。
+        * **P/BF：** 投手每打席平均用球數。**3.5球以下**為省球大師，**4.2球以上**代表常陷入滿球數纏鬥。
+        * **對手打擊三圍 (BA/OBP/SLG/OPS)：** 投手右側的打擊數據，代表「面對該投手時，打者繳出的成績」。
+        
+        **【Baseball-Reference (BR) Pos 守位密碼學】**
+        * **1~9**：標準棒球守位 (1=投手, 2=捕手... 8=中外野, 9=右外野)。 **D**=指定打擊, **H**=代打/代跑。
+        * **排列順序**：依出賽頻率由高到低排列 (例：`87` 代表主要守中外野，其次左外野)。
+        * **符號 `*`**：代表出賽至少三分之二 (不動先發)。
+        * **符號 `/`**：斜線後面的守位代表客串場次極少。
         """)
 
     get_career_stats()
     df_b = st.session_state.get('df_b_raw', pd.DataFrame())
     df_p = st.session_state.get('df_p_raw', pd.DataFrame())
     
-    b_col_config = {
-        "wRC+": st.column_config.NumberColumn(help="加權創造得分：100為本聯盟平均。150代表火力高出平均50%，表現極差可為負數"),
-        "OPS": st.column_config.NumberColumn(help="攻擊指數 (上壘率 + 長打率)"),
-        "AVG": st.column_config.NumberColumn(help="打擊率"),
-        "OBP": st.column_config.NumberColumn(help="上壘率"),
-        "SLG": st.column_config.NumberColumn(help="長打率"),
-        "ISO": st.column_config.NumberColumn(help="純長打率"),
-        "BABIP": st.column_config.NumberColumn(help="場內安打率"),
-        "eWAR": st.column_config.NumberColumn(help="預期勝場貢獻值"),
-        "K%": st.column_config.NumberColumn(help="被三振率"),
-        "BB%": st.column_config.NumberColumn(help="保送率")
-    }
-    
-    p_col_config = {
-        "ERA": st.column_config.NumberColumn(help="防禦率 (每9局平均自責失分)"),
-        "FIP": st.column_config.NumberColumn(help="獨立防禦率：純看三振、保送與挨轟，反映真實硬實力。"),
-        "WHIP": st.column_config.NumberColumn(help="每局被上壘率"),
-        "eWAR": st.column_config.NumberColumn(help="預期勝場貢獻值")
-    }
+    def fmt_rate_t3(val):
+        if pd.isna(val) or val == float('inf'): return ".000"
+        if val >= 1: return f"{val:.3f}"
+        return f"{val:.3f}".lstrip('0')
 
     latest_s_str = "Season 1"
     if not df_p.empty and '賽事階段' in df_p.columns:
@@ -3290,7 +3374,7 @@ with tab3:
 
     col_f1, col_f2, col_f3 = st.columns([1, 1.5, 2.5])
     with col_f1:
-        if st.button("🔄 刷新數據", type="primary", key="btn_refresh_tab3_v48_final"): 
+        if st.button("🔄 刷新數據", type="primary", key="btn_refresh_tab3_br"): 
             get_raw_records.clear()
             st.rerun()
             
@@ -3298,23 +3382,32 @@ with tab3:
         season_options = ["十年總成績"] + SEASONS
         s_idx = season_options.index(st.session_state.default_season) if st.session_state.default_season in season_options else 0
         def update_season():
-            st.session_state.default_season = st.session_state.tab3_f_season_v48
+            st.session_state.default_season = st.session_state.tab3_f_season_br
             if 'save_settings' in globals(): save_settings()
-        filter_season = st.selectbox("篩選賽季", season_options, index=s_idx, key="tab3_f_season_v48", on_change=update_season)
+        filter_season = st.selectbox("篩選賽季", season_options, index=s_idx, key="tab3_f_season_br", on_change=update_season)
 
     with col_f3:
         if filter_season == "十年總成績":
-            filter_game = st.selectbox("比賽階段", ["不限 (看全部)"], disabled=True, key="tab3_f_game_disabled_v48")
-            target_prefix = ""
+            game_options_career = ["不限 (看全部)", "例行賽總和", "世界大賽總和"]
+            saved_game_career = st.session_state.get("f_game_pref_career", "不限 (看全部)")
+            gc_idx = game_options_career.index(saved_game_career) if saved_game_career in game_options_career else 0
+            def update_game_career():
+                st.session_state.f_game_pref_career = st.session_state.tab3_f_game_sel_career
+                if 'save_settings' in globals(): save_settings()
+            filter_game = st.selectbox("比賽階段", game_options_career, index=gc_idx, key="tab3_f_game_sel_career", on_change=update_game_career)
+            
+            if filter_game == "不限 (看全部)": target_prefix = ""
+            elif filter_game == "例行賽總和": target_prefix = "例行賽"
+            elif filter_game == "世界大賽總和": target_prefix = "世界大賽"
             is_exact_match = False
         else:
             game_options = ["看整季", "例行賽總和", "世界大賽總和"] + GAME_STAGES
             saved_game = st.session_state.get("f_game_pref", "看整季")
             g_idx = game_options.index(saved_game) if saved_game in game_options else 0
             def update_game():
-                st.session_state.f_game_pref = st.session_state.tab3_f_game_sel_v48
+                st.session_state.f_game_pref = st.session_state.tab3_f_game_sel_br
                 if 'save_settings' in globals(): save_settings()
-            filter_game = st.selectbox("比賽階段", game_options, index=g_idx, key="tab3_f_game_sel_v48", on_change=update_game)
+            filter_game = st.selectbox("比賽階段", game_options, index=g_idx, key="tab3_f_game_sel_br", on_change=update_game)
             s_num = filter_season.split(" ")[1]
             if filter_game == "看整季": 
                 target_prefix = f"[S{s_num}]"
@@ -3341,99 +3434,28 @@ with tab3:
     dyn_pa_limit = max(1.0, team_games_played * 1.0)
     dyn_ip_limit = max(0.1, team_games_played * 0.33)
 
-    def generate_initials(name):
-        clean_name = str(name).replace('.', ' ').replace('-', ' ')
-        parts = clean_name.split()
-        if len(parts) >= 2: return (parts[0][0] + parts[-1][0]).upper()
-        return str(name)[:2].upper()
-        
-    def fmt_rate_t3(val):
-        if pd.isna(val) or val == float('inf'): return ".000"
-        if val >= 1: return f"{val:.3f}"
-        return f"{val:.3f}".lstrip('0')
-
-    # =======================================================
-    # 📊 球隊戰績排名區塊
-    # =======================================================
     st.markdown("### 📊 球隊戰績排名 (Team Standings)")
     
     if not df_p.empty and '球隊' in df_p.columns:
         stand_b = b_filter_df
         stand_p = p_filter_df
-        df_p_full = st.session_state.get('df_p_raw', pd.DataFrame())
         
         team_data = []
         for team in TEAMS:
-            t_p = stand_p[stand_p['球隊'] == team].sort_values('時間戳記') if '時間戳記' in stand_p.columns else stand_p[stand_p['球隊'] == team]
-            t_b = stand_b[stand_b['球隊'] == team] if not stand_b.empty and '球隊' in stand_b.columns else pd.DataFrame()
+            t_p = stand_p[stand_p['球隊'] == team]
+            t_b = stand_b[stand_b['球隊'] == team] if not stand_b.empty else pd.DataFrame()
             
             wins, losses, draws = 0, 0, 0
-            starters = []
-            
             if '賽事階段' in t_p.columns:
                 for stage, group in t_p.groupby('賽事階段', sort=False):
                     res = group['勝敗'].astype(str).values if '勝敗' in group.columns else []
                     if any('勝' in x for x in res): wins += 1
                     elif any('敗' in x for x in res): losses += 1
                     else: draws += 1 
-                    
-                    g_sorted = group.sort_values('時間戳記')
-                    if not g_sorted.empty and '投手姓名' in g_sorted.columns: 
-                        starters.append(g_sorted.iloc[0]['投手姓名'])
             
             rs = pd.to_numeric(t_b['得分'], errors='coerce').fillna(0).sum() if not t_b.empty and '得分' in t_b.columns else 0
             ra = pd.to_numeric(t_p['失分'], errors='coerce').fillna(0).sum() if not t_p.empty and '失分' in t_p.columns else 0
             
-            next_starter = "未指定"
-            if filter_season == "十年總成績":
-                next_starter = "—"
-            else:
-                s_num = filter_season.split(" ")[1]
-                t_p_all = df_p_full[df_p_full['球隊'] == team]
-                rs_df = t_p_all[t_p_all['賽事階段'].astype(str).str.contains(f"\[S{s_num}\] 例行賽", regex=False)]
-                ws_df = t_p_all[t_p_all['賽事階段'].astype(str).str.contains(f"\[S{s_num}\] 世界大賽", regex=False)]
-                
-                def get_starters(df):
-                    st_list = []
-                    for stg, grp in df.groupby('賽事階段', sort=False):
-                        g_sort = grp.sort_values('時間戳記')
-                        if not g_sort.empty and '投手姓名' in g_sort.columns:
-                            st_list.append(g_sort.iloc[0]['投手姓名'])
-                    return st_list
-                    
-                rs_starters = get_starters(rs_df)
-                ws_starters = get_starters(ws_df)
-                
-                ws_wins = sum(1 for stg, grp in ws_df.groupby('賽事階段', sort=False) if any('勝' in str(x) for x in grp['勝敗'].values))
-                ws_losses = sum(1 for stg, grp in ws_df.groupby('賽事階段', sort=False) if any('敗' in str(x) for x in grp['勝敗'].values))
-                
-                if ws_wins >= 4 or ws_losses >= 4:
-                    next_starter = "賽季已結束"
-                elif len(rs_starters) < 10:
-                    if len(rs_starters) >= 5:
-                        next_starter = rs_starters[len(rs_starters) - 5]
-                    else:
-                        next_starter = st.session_state.pitchers.get(team, "未指定")
-                else:
-                    sp_stats = []
-                    for sp in set(rs_starters):
-                        sp_df = rs_df[rs_df['投手姓名'] == sp]
-                        outs = (pd.to_numeric(sp_df['局數(整數)'], errors='coerce').fillna(0).sum() * 3 + 
-                                pd.to_numeric(sp_df['局數(出局數)'], errors='coerce').fillna(0).sum())
-                        er = pd.to_numeric(sp_df['自責分'], errors='coerce').fillna(0).sum()
-                        era = (er * 9) / (outs / 3.0) if outs > 0 else float('inf')
-                        if outs >= 30:
-                            sp_stats.append((sp, era))
-                    
-                    sp_stats.sort(key=lambda x: x[1])
-                    ranked_sps = [x[0] for x in sp_stats]
-                    
-                    if not ranked_sps:
-                        next_starter = "未指定"
-                    else:
-                        playoff_rotation_size = min(4, len(ranked_sps))
-                        next_starter = ranked_sps[len(ws_starters) % playoff_rotation_size]
-
             team_data.append({
                 "球隊": f"🔴 {team}" if team == "LAA" else f"🔵 {team}",
                 "已賽": wins + losses + draws,
@@ -3447,10 +3469,13 @@ with tab3:
     else: st.info("尚無數據可計算戰績。")
     st.markdown("---")
     
-    # =======================================================
-    # ⚾ 打擊成績區塊
-    # =======================================================
-    st.markdown("### ⚾ 打擊成績")
+    st.markdown("""
+    <style>
+    [data-testid="stDataFrame"] div[data-testid="stTable"] { font-size: 12px; }
+    </style>
+    """, unsafe_allow_html=True)
+    
+    st.markdown("### ⚾ 打擊成績 (Batting)")
     if not df_b.empty:
         curr_b = b_filter_df.copy()
         if curr_b.empty: 
@@ -3464,61 +3489,6 @@ with tab3:
             elif '四壞' in curr_b.columns: curr_b['四壞球'] = pd.to_numeric(curr_b['四壞'], errors='coerce').fillna(0)
             else: curr_b['四壞球'] = 0
 
-            curr_b['Season'] = curr_b['賽事階段'].astype(str).apply(lambda x: re.search(r'\[S(\d+)\]', x).group(1) if re.search(r'\[S(\d+)\]', x) else '1')
-            player_ewar_b = {}
-            pos_adj_dict = {"C": 0.15, "SS": 0.12, "2B": 0.05, "3B": 0.05, "CF": 0.05, "LF": 0.00, "RF": 0.00, "1B": -0.05, "DH": -0.12, "PH": -0.12, "PR": -0.12}
-            
-            for s in curr_b['Season'].unique():
-                s_df = curr_b[curr_b['Season'] == s]
-                s_pa = s_df['打席'].sum()
-                s_h = s_df['安打'].sum()
-                s_bb = s_df['四壞球'].sum()
-                s_2b = s_df['二壘安打'].sum()
-                s_3b = s_df['三壘安打'].sum()
-                s_hr = s_df['全壘打'].sum()
-
-                s_1b = s_h - s_2b - s_3b - s_hr
-                s_lg_woba_num = 0.69 * s_bb + 0.88 * s_1b + 1.25 * s_2b + 1.59 * s_3b + 2.06 * s_hr
-                s_lg_woba = s_lg_woba_num / s_pa if s_pa > 0 else 0.320
-                
-                def get_main_pos(x):
-                    return x.value_counts().index[0] if not x.empty else 'DH'
-                
-                s_agg = s_df.groupby(['球隊', '球員姓名']).agg({
-                    '打席': 'sum', '打數': 'sum', '安打': 'sum', '二壘安打': 'sum', '三壘安打': 'sum', 
-                    '全壘打': 'sum', '四壞球': 'sum', '三振': 'sum',
-                    '守位': get_main_pos if '守位' in s_df.columns else lambda x: 'DH'
-                }).reset_index()
-                
-                for _, r in s_agg.iterrows():
-                    p_1b = r['安打'] - r['二壘安打'] - r['三壘安打'] - r['全壘打']
-                    p_woba = (0.69 * r['四壞球'] + 0.88 * p_1b + 1.25 * r['二壘安打'] + 1.59 * r['三壘安打'] + 2.06 * r['全壘打']) / max(1, r['打席'])
-                    
-                    # ✨ 修正 1：迴圈內計算球員 eWAR 時，套用最新 wRC+ 動態常態化公式
-                    p_wrc_plus = ((p_woba / s_lg_woba) - 1) * 200 + 100 if s_lg_woba > 0 else 0
-                    
-                    ewar = (((p_wrc_plus - 70) / 80) + pos_adj_dict.get(r['守位'], -0.12)) * (r['打席'] / 15)
-                    ewar = 0.0 if abs(ewar) < 0.05 else round(ewar, 1)
-                    
-                    key = (r['球隊'], r['球員姓名'])
-                    player_ewar_b[key] = player_ewar_b.get(key, 0.0) + ewar
-
-            agg_b = curr_b.groupby(['球隊', '球員姓名']).agg({
-                '打席': 'sum', '打數': 'sum', '安打': 'sum', '二壘安打': 'sum', '三壘安打': 'sum', 
-                '全壘打': 'sum', '打點': 'sum', '得分': 'sum', '四壞球': 'sum', '三振': 'sum', '盜壘': 'sum',
-                '賽事階段': 'count'
-            }).reset_index().rename(columns={'賽事階段': '出賽數'})
-            
-            agg_b['一壘安打'] = agg_b['安打'] - agg_b['二壘安打'] - agg_b['三壘安打'] - agg_b['全壘打']
-            agg_b['AVG'] = (agg_b['安打'] / agg_b['打數'].replace(0, 1)).fillna(0)
-            agg_b['OBP'] = ((agg_b['安打'] + agg_b['四壞球']) / agg_b['打席'].replace(0, 1)).fillna(0)
-            agg_b['SLG'] = ((agg_b['一壘安打'] + 2*agg_b['二壘安打'] + 3*agg_b['三壘安打'] + 4*agg_b['全壘打']) / agg_b['打數'].replace(0, 1)).fillna(0)
-            agg_b['OPS'] = agg_b['OBP'] + agg_b['SLG']
-            agg_b['ISO'] = agg_b['SLG'] - agg_b['AVG']
-            agg_b['BABIP'] = ((agg_b['安打'] - agg_b['全壘打']) / (agg_b['打數'] - agg_b['三振'] - agg_b['全壘打']).replace(0, 1)).fillna(0)
-            agg_b['BB%'] = (agg_b['四壞球'] / agg_b['打席'].replace(0, 1) * 100).fillna(0)
-            agg_b['K%'] = (agg_b['三振'] / agg_b['打席'].replace(0, 1) * 100).fillna(0)
-            
             total_h = curr_b['安打'].sum()
             total_bb = curr_b['四壞球'].sum()
             total_pa = curr_b['打席'].sum()
@@ -3528,38 +3498,112 @@ with tab3:
             lg_woba_num = 0.69 * total_bb + 0.88 * lg_1b + 1.25 * curr_b['二壘安打'].sum() + 1.59 * curr_b['三壘安打'].sum() + 2.06 * curr_b['全壘打'].sum()
             lg_woba = lg_woba_num / total_pa if total_pa > 0 else 0.320
             
-            agg_b['wOBA'] = (0.69 * agg_b['四壞球'] + 0.88 * agg_b['一壘安打'] + 1.25 * agg_b['二壘安打'] + 1.59 * agg_b['三壘安打'] + 2.06 * agg_b['全壘打']) / agg_b['打席'].replace(0, 1)
-            
-            # ✨ 修正 2：Pandas 向量化列的 wRC+ 計算同步升級
-            agg_b['wRC+'] = (((agg_b['wOBA'] / lg_woba) - 1) * 200 + 100).fillna(0).astype(int)
-            
-            agg_b['eWAR'] = agg_b.apply(lambda r: player_ewar_b.get((r['球隊'], r['球員姓名']), 0.0), axis=1)
-            agg_b['eWAR'] = agg_b['eWAR'].apply(lambda x: 0.0 if abs(x) < 0.05 else round(x, 1))
+            lg_obp = (total_h + total_bb) / total_pa if total_pa > 0 else 0.320
+            total_tb_lg = lg_1b + 2*curr_b['二壘安打'].sum() + 3*curr_b['三壘安打'].sum() + 4*curr_b['全壘打'].sum()
+            lg_slg = total_tb_lg / total_ab if total_ab > 0 else 0.400
 
-            qual_b = agg_b[agg_b['打席'] >= dyn_pa_limit]
+            curr_b['Season'] = curr_b['賽事階段'].astype(str).apply(lambda x: re.search(r'\[S(\d+)\]', x).group(1) if re.search(r'\[S(\d+)\]', x) else '1')
+            player_ewar_b = {}
+            pos_adj_dict = {"C": 0.15, "SS": 0.12, "2B": 0.05, "3B": 0.05, "CF": 0.05, "LF": 0.00, "RF": 0.00, "1B": -0.05, "DH": -0.12, "PH": -0.12, "PR": -0.12}
             
+            for s in curr_b['Season'].unique():
+                s_df = curr_b[curr_b['Season'] == s]
+                s_pa = s_df['打席'].sum()
+                s_lg_woba = (0.69*s_df['四壞球'].sum() + 0.88*(s_df['安打'].sum()-s_df['二壘安打'].sum()-s_df['三壘安打'].sum()-s_df['全壘打'].sum()) + 1.25*s_df['二壘安打'].sum() + 1.59*s_df['三壘安打'].sum() + 2.06*s_df['全壘打'].sum()) / s_pa if s_pa > 0 else 0.320
+                
+                s_agg = s_df.groupby('球員姓名').agg({'打席': 'sum', '打數': 'sum', '安打': 'sum', '二壘安打': 'sum', '三壘安打': 'sum', '全壘打': 'sum', '四壞球': 'sum', '三振': 'sum', '守位': lambda x: x.value_counts().index[0] if not x.empty else 'DH'}).reset_index()
+                
+                for _, r in s_agg.iterrows():
+                    p_1b = r['安打'] - r['二壘安打'] - r['三壘安打'] - r['全壘打']
+                    p_woba = (0.69 * r['四壞球'] + 0.88 * p_1b + 1.25 * r['二壘安打'] + 1.59 * r['三壘安打'] + 2.06 * r['全壘打']) / max(1, r['打席'])
+                    p_wrc_plus = ((p_woba / s_lg_woba) - 1) * 200 + 100 if s_lg_woba > 0 else 0
+                    ewar = (((p_wrc_plus - 70) / 80) + pos_adj_dict.get(r['守位'], -0.12)) * (r['打席'] / 15)
+                    ewar = 0.0 if abs(ewar) < 0.05 else round(ewar, 1)
+                    player_ewar_b[r['球員姓名']] = player_ewar_b.get(r['球員姓名'], 0.0) + ewar
+
+            def get_br_pos(pos_series):
+                if pos_series.empty: return "D"
+                pos_map = {"P":"1", "C":"2", "1B":"3", "2B":"4", "3B":"5", "SS":"6", "LF":"7", "CF":"8", "RF":"9", "DH":"D", "PH":"H", "PR":"H"}
+                counts = {}
+                for p in pos_series.dropna():
+                    char = pos_map.get(str(p).strip(), "")
+                    if char: counts[char] = counts.get(char, 0) + 1
+                if not counts: return "D"
+                
+                is_career = (filter_season == "十年總成績")
+                threshold = 10 if is_career else max(2, int(team_games_played * 0.15))
+                star_thresh = team_games_played * 0.66
+                
+                main_str, minor_str = "", ""
+                for char, count in sorted(counts.items(), key=lambda x: x[1], reverse=True):
+                    if not is_career and count >= star_thresh: main_str += f"*{char}"
+                    elif count >= threshold: main_str += char
+                    else: minor_str += char
+                
+                res = main_str.replace("**", "*")
+                if not res and minor_str: return minor_str
+                if minor_str: res += f"/{minor_str}"
+                return res if res else "D"
+
+            agg_b = curr_b.groupby('球員姓名').agg({
+                '打席': 'sum', '打數': 'sum', '得分': 'sum', '安打': 'sum', '二壘安打': 'sum', '三壘安打': 'sum', 
+                '全壘打': 'sum', '打點': 'sum', '盜壘': 'sum', '四壞球': 'sum', '三振': 'sum',
+                '賽事階段': 'nunique', '守位': get_br_pos
+            }).reset_index()
+            
+            last_team_b = curr_b.sort_values('時間戳記').groupby('球員姓名')['球隊'].last()
+            all_team_b = curr_b.sort_values('時間戳記').groupby('球員姓名')['球隊'].unique().apply(lambda x: "/".join(x))
+            
+            agg_b['最新球隊'] = agg_b['球員姓名'].map(last_team_b)
+            agg_b['Tm'] = agg_b['球員姓名'].map(all_team_b)
+            
+            agg_b.rename(columns={
+                '球員姓名': 'Player', '賽事階段': 'G', '打席': 'PA', '打數': 'AB', '得分': 'R', '安打': 'H',
+                '二壘安打': '2B', '三壘安打': '3B', '全壘打': 'HR', '打點': 'RBI', '盜壘': 'SB', '四壞球': 'BB', '三振': 'SO', '守位': 'Pos'
+            }, inplace=True)
+            
+            agg_b['1B'] = agg_b['H'] - agg_b['2B'] - agg_b['3B'] - agg_b['HR']
+            agg_b['TB'] = agg_b['1B'] + 2*agg_b['2B'] + 3*agg_b['3B'] + 4*agg_b['HR']
+            agg_b['BA'] = (agg_b['H'] / agg_b['AB'].replace(0, 1)).fillna(0)
+            agg_b['OBP'] = ((agg_b['H'] + agg_b['BB']) / agg_b['PA'].replace(0, 1)).fillna(0)
+            agg_b['SLG'] = (agg_b['TB'] / agg_b['AB'].replace(0, 1)).fillna(0)
+            agg_b['OPS'] = agg_b['OBP'] + agg_b['SLG']
+            
+            agg_b['OPS+'] = (100 * ((agg_b['OBP'] / lg_obp) + (agg_b['SLG'] / lg_slg) - 1)).fillna(100).astype(int)
+            agg_b['wOBA'] = (0.69 * agg_b['BB'] + 0.88 * agg_b['1B'] + 1.25 * agg_b['2B'] + 1.59 * agg_b['3B'] + 2.06 * agg_b['HR']) / agg_b['PA'].replace(0, 1)
+            agg_b['rOBA+'] = (((agg_b['wOBA'] / lg_woba) - 1) * 200 + 100).fillna(100).astype(int)
+            
+            agg_b['BAbip'] = ((agg_b['H'] - agg_b['HR']) / (agg_b['AB'] - agg_b['SO'] - agg_b['HR']).replace(0, 1)).fillna(0)
+            agg_b['ISO'] = agg_b['SLG'] - agg_b['BA']
+            agg_b['HR%'] = (agg_b['HR'] / agg_b['PA'].replace(0, 1) * 100).fillna(0)
+            agg_b['SO%'] = (agg_b['SO'] / agg_b['PA'].replace(0, 1) * 100).fillna(0)
+            agg_b['BB%'] = (agg_b['BB'] / agg_b['PA'].replace(0, 1) * 100).fillna(0)
+            
+            agg_b['WAR'] = agg_b['Player'].map(player_ewar_b).fillna(0.0)
+
+            qual_b = agg_b[agg_b['PA'] >= dyn_pa_limit]
             if not agg_b.empty:
                 st.markdown(f"#### 👑 聯盟打擊領先者 (規定打席: {dyn_pa_limit:.1f})")
-                avg_df = qual_b[qual_b['AVG'] > 0]
-                h_df = agg_b[agg_b['安打'] > 0]
-                hr_df = agg_b[agg_b['全壘打'] > 0]
-                rbi_df = agg_b[agg_b['打點'] > 0]
-                sb_df = agg_b[agg_b['盜壘'] > 0]
+                avg_df = qual_b[qual_b['BA'] > 0]
+                h_df = agg_b[agg_b['H'] > 0]
+                hr_df = agg_b[agg_b['HR'] > 0]
+                rbi_df = agg_b[agg_b['RBI'] > 0]
+                sb_df = agg_b[agg_b['SB'] > 0]
 
-                name_avg = f"[{avg_df.sort_values(by=['AVG', '安打'], ascending=[False, False]).iloc[0]['球隊']}] {avg_df.sort_values(by=['AVG', '安打'], ascending=[False, False]).iloc[0]['球員姓名']}" if not avg_df.empty else "無(未達標)"
-                val_avg = avg_df['AVG'].max() if not avg_df.empty else 0.0
+                name_avg = f"[{avg_df.sort_values(by=['BA', 'H'], ascending=[False, False]).iloc[0]['最新球隊']}] {avg_df.sort_values(by=['BA', 'H'], ascending=[False, False]).iloc[0]['Player']}" if not avg_df.empty else "無(未達標)"
+                val_avg = avg_df['BA'].max() if not avg_df.empty else 0.0
 
-                name_h = f"[{h_df.sort_values(by=['安打', 'AVG'], ascending=[False, False]).iloc[0]['球隊']}] {h_df.sort_values(by=['安打', 'AVG'], ascending=[False, False]).iloc[0]['球員姓名']}" if not h_df.empty else "無"
-                val_h = h_df['安打'].max() if not h_df.empty else 0
+                name_h = f"[{h_df.sort_values(by=['H', 'BA'], ascending=[False, False]).iloc[0]['最新球隊']}] {h_df.sort_values(by=['H', 'BA'], ascending=[False, False]).iloc[0]['Player']}" if not h_df.empty else "無"
+                val_h = h_df['H'].max() if not h_df.empty else 0
 
-                name_hr = f"[{hr_df.sort_values(by=['全壘打', 'AVG'], ascending=[False, False]).iloc[0]['球隊']}] {hr_df.sort_values(by=['全壘打', 'AVG'], ascending=[False, False]).iloc[0]['球員姓名']}" if not hr_df.empty else "無"
-                val_hr = hr_df['全壘打'].max() if not hr_df.empty else 0
+                name_hr = f"[{hr_df.sort_values(by=['HR', 'BA'], ascending=[False, False]).iloc[0]['最新球隊']}] {hr_df.sort_values(by=['HR', 'BA'], ascending=[False, False]).iloc[0]['Player']}" if not hr_df.empty else "無"
+                val_hr = hr_df['HR'].max() if not hr_df.empty else 0
 
-                name_rbi = f"[{rbi_df.sort_values(by=['打點', '全壘打'], ascending=[False, False]).iloc[0]['球隊']}] {rbi_df.sort_values(by=['打點', '全壘打'], ascending=[False, False]).iloc[0]['球員姓名']}" if not rbi_df.empty else "無"
-                val_rbi = rbi_df['打點'].max() if not rbi_df.empty else 0
+                name_rbi = f"[{rbi_df.sort_values(by=['RBI', 'HR'], ascending=[False, False]).iloc[0]['最新球隊']}] {rbi_df.sort_values(by=['RBI', 'HR'], ascending=[False, False]).iloc[0]['Player']}" if not rbi_df.empty else "無"
+                val_rbi = rbi_df['RBI'].max() if not rbi_df.empty else 0
 
-                name_sb = f"[{sb_df.sort_values(by=['盜壘', '打席'], ascending=[False, True]).iloc[0]['球隊']}] {sb_df.sort_values(by=['盜壘', '打席'], ascending=[False, True]).iloc[0]['球員姓名']}" if not sb_df.empty else "無"
-                val_sb = sb_df['盜壘'].max() if not sb_df.empty else 0
+                name_sb = f"[{sb_df.sort_values(by=['SB', 'PA'], ascending=[False, True]).iloc[0]['最新球隊']}] {sb_df.sort_values(by=['SB', 'PA'], ascending=[False, True]).iloc[0]['Player']}" if not sb_df.empty else "無"
+                val_sb = sb_df['SB'].max() if not sb_df.empty else 0
 
                 lc1, lc2, lc3, lc4, lc5 = st.columns(5)
                 lc1.metric(f"打擊王", f"{fmt_rate_t3(val_avg)}", name_avg)
@@ -3567,59 +3611,64 @@ with tab3:
                 lc3.metric(f"全壘打王", f"{int(val_hr)} HR", name_hr)
                 lc4.metric(f"打點王", f"{int(val_rbi)} RBI", name_rbi)
                 lc5.metric(f"盜壘王", f"{int(val_sb)} SB", name_sb)
-            
+                
             st.markdown("---")
-            lg_obp = (total_h + total_bb) / total_pa if total_pa > 0 else 0.0
-            total_tb = lg_1b + 2*curr_b['二壘安打'].sum() + 3*curr_b['三壘安打'].sum() + 4*curr_b['全壘打'].sum()
-            lg_slg = total_tb / total_ab if total_ab > 0 else 0.0
-            lg_ops = lg_obp + lg_slg
-            lg_avg = total_h / total_ab if total_ab > 0 else 0.0
-            
-            summary_b = []
-            summary_b.append({'隊伍': '🌎 全聯盟平均', 'wRC+': 100, 'OPS': lg_ops, 'AVG': lg_avg, 'OBP': lg_obp, 'SLG': lg_slg})
+
+            br_b_cols = ['Player', 'Tm', 'WAR', 'G', 'PA', 'AB', 'R', 'H', '2B', '3B', 'HR', 'RBI', 'SB', 'BB', 'SO', 'BA', 'OBP', 'SLG', 'OPS', 'OPS+', 'rOBA+', 'BAbip', 'ISO', 'HR%', 'SO%', 'BB%', 'TB', 'Pos']
+            b_format_dict = {'WAR': '{:.1f}', 'BA': fmt_rate_t3, 'OBP': fmt_rate_t3, 'SLG': fmt_rate_t3, 'OPS': fmt_rate_t3, 'BAbip': fmt_rate_t3, 'ISO': fmt_rate_t3, 'HR%': '{:.1f}%', 'SO%': '{:.1f}%', 'BB%': '{:.1f}%'}
+
+            def style_b_leaders(df):
+                styles = pd.DataFrame('', index=df.index, columns=df.columns)
+                for col in ['WAR', 'G', 'PA', 'AB', 'R', 'H', '2B', '3B', 'HR', 'RBI', 'SB', 'BB', 'TB']:
+                    if col in df.columns and col in agg_b.columns:
+                        max_v = agg_b[col].max()
+                        if max_v > 0: styles[col] = np.where((df[col] == max_v) & (df['Player'] != 'Team Total'), 'font-weight: 900; color: #ffcc00;', '')
+                for col in ['BA', 'OBP', 'SLG', 'OPS', 'OPS+', 'rOBA+', 'BAbip', 'ISO']:
+                    if col in df.columns and not qual_b.empty and col in qual_b.columns:
+                        max_v = qual_b[col].max()
+                        if max_v > 0: styles[col] = np.where((df[col] == max_v) & (df['Player'] != 'Team Total'), 'font-weight: 900; color: #ffcc00;', '')
+                return styles
+
             for team in TEAMS:
-                t_df = curr_b[curr_b['球隊'] == team]
-                if not t_df.empty:
-                    t_pa = t_df['打席'].sum()
-                    t_ab = t_df['打數'].sum()
-                    t_h = t_df['安打'].sum()
-                    t_bb = t_df['四壞球'].sum()
-                    t_1b = t_h - t_df['二壘安打'].sum() - t_df['三壘安打'].sum() - t_df['全壘打'].sum()
+                st.markdown(f"#### {team} 打擊總表 (以最新效力球隊分類)")
+                team_b = agg_b[agg_b['最新球隊'] == team].copy()
+                if not team_b.empty:
+                    team_raw_b = curr_b[curr_b['球隊'] == team]
+                    
+                    t_row = pd.DataFrame([{
+                        'Player': 'Team Total', 'Tm': team, 'WAR': team_b['WAR'].sum(), 'G': team_games_played, 'PA': team_raw_b['打席'].sum(),
+                        'AB': team_raw_b['打數'].sum(), 'R': team_raw_b['得分'].sum(), 'H': team_raw_b['安打'].sum(), '2B': team_raw_b['二壘安打'].sum(),
+                        '3B': team_raw_b['三壘安打'].sum(), 'HR': team_raw_b['全壘打'].sum(), 'RBI': team_raw_b['打點'].sum(), 'SB': team_raw_b['盜壘'].sum(),
+                        'BB': team_raw_b['四壞球'].sum(), 'SO': team_raw_b['三振'].sum(), 'Pos': ''
+                    }])
+                    
+                    t_h, t_ab, t_pa, t_bb = t_row['H'].iloc[0], t_row['AB'].iloc[0], t_row['PA'].iloc[0], t_row['BB'].iloc[0]
+                    t_hr, t_so = t_row['HR'].iloc[0], t_row['SO'].iloc[0]
+                    t_1b = t_h - t_row['2B'].iloc[0] - t_row['3B'].iloc[0] - t_hr
+                    t_tb = t_1b + 2*t_row['2B'].iloc[0] + 3*t_row['3B'].iloc[0] + 4*t_hr
+                    t_row['TB'] = t_tb
+                    
+                    t_ba = t_h / t_ab if t_ab > 0 else 0
                     t_obp = (t_h + t_bb) / t_pa if t_pa > 0 else 0
-                    t_tb = t_1b + 2*t_df['二壘安打'].sum() + 3*t_df['三壘安打'].sum() + 4*t_df['全壘打'].sum()
                     t_slg = t_tb / t_ab if t_ab > 0 else 0
-                    t_ops = t_obp + t_slg
-                    t_avg = t_h / t_ab if t_ab > 0 else 0
-                    t_woba_num = 0.69 * t_bb + 0.88 * t_1b + 1.25 * t_df['二壘安打'].sum() + 1.59 * t_df['三壘安打'].sum() + 2.06 * t_df['全壘打'].sum()
-                    t_woba = t_woba_num / t_pa if t_pa > 0 else 0
+                    t_woba = (0.69*t_bb + 0.88*t_1b + 1.25*t_row['2B'].iloc[0] + 1.59*t_row['3B'].iloc[0] + 2.06*t_hr) / t_pa if t_pa > 0 else 0
                     
-                    # ✨ 修正 3：球隊結算的 wRC+ 同步升級
-                    t_wrc_plus = ((t_woba / lg_woba) - 1) * 200 + 100 if (lg_woba > 0 and t_pa > 0) else 0
+                    t_row['BA'], t_row['OBP'], t_row['SLG'] = t_ba, t_obp, t_slg
+                    t_row['OPS'] = t_obp + t_slg
+                    t_row['BAbip'] = (t_h - t_hr) / (t_ab - t_so - t_hr) if (t_ab - t_so - t_hr) > 0 else 0
+                    t_row['ISO'] = t_slg - t_ba
+                    t_row['HR%'] = (t_hr / t_pa * 100) if t_pa > 0 else 0
+                    t_row['SO%'] = (t_so / t_pa * 100) if t_pa > 0 else 0
+                    t_row['BB%'] = (t_bb / t_pa * 100) if t_pa > 0 else 0
+                    t_row['OPS+'] = int(100 * ((t_obp/lg_obp) + (t_slg/lg_slg) - 1)) if lg_obp > 0 and lg_slg > 0 else 100
+                    t_row['rOBA+'] = int(((t_woba/lg_woba) - 1) * 200 + 100) if lg_woba > 0 else 100
                     
-                    summary_b.append({'隊伍': f"🔴 {team}" if team == "LAA" else f"🔵 {team}", 'wRC+': int(round(t_wrc_plus, 0)), 'OPS': t_ops, 'AVG': t_avg, 'OBP': t_obp, 'SLG': t_slg})
-            
-            st.markdown("#### ⚖️ 團隊火力對比")
-            df_sum_b = pd.DataFrame(summary_b)
-            st.dataframe(df_sum_b.style.format({'OPS': '{:.3f}', 'AVG': '{:.3f}', 'OBP': '{:.3f}', 'SLG': '{:.3f}'}), use_container_width=True, hide_index=True, column_config=b_col_config)
+                    final_team_b = pd.concat([team_b[br_b_cols].sort_values('WAR', ascending=False), t_row[br_b_cols]], ignore_index=True)
+                    st.dataframe(final_team_b.style.format(b_format_dict).apply(style_b_leaders, axis=None), use_container_width=True, hide_index=True)
+                else: st.caption("無數據")
 
-            show_cols_b = ['球隊', '球員姓名', '出賽數', '打席', '打數', 'wRC+', 'OPS', 'AVG', 'OBP', 'SLG', 'ISO', 'BABIP', 'BB%', 'K%', '全壘打', '打點', '盜壘', 'eWAR']
-            show_df = agg_b[show_cols_b].copy().sort_values(by=['球隊', 'wRC+'], ascending=[True, False])
-
-            for team in TEAMS:
-                st.markdown(f"#### {team} 個人打擊榜")
-                team_df = show_df[show_df['球隊'] == team]
-                if not team_df.empty: 
-                    styled_df = team_df.drop(columns=['球隊']).style.format({
-                        'OPS': '{:.3f}', 'AVG': '{:.3f}', 'OBP': '{:.3f}', 'SLG': '{:.3f}', 'ISO': '{:.3f}', 'BABIP': '{:.3f}',
-                        'BB%': '{:.1f}%', 'K%': '{:.1f}%', 'eWAR': '{:.1f}'
-                    })
-                    st.dataframe(styled_df, use_container_width=True, hide_index=True, column_config=b_col_config)
-
-            # =======================================================
-            # ✨【功能一】：兩隊 1~9 棒次累積 wRC+ 火力橫向對比圖
-            # =======================================================
             st.markdown("---")
-            st.markdown("#### 📊 各棒次生產線火力對比 (Lineup Production: wRC+ by Slot)")
+            st.markdown("#### 📊 各棒次生產線火力對比 (Lineup Production: rOBA+ by Slot)")
             df_order = curr_b.copy()
             df_order['棒次_idx'] = pd.to_numeric(df_order['棒次'], errors='coerce').fillna(0).astype(int)
             df_order = df_order[(df_order['棒次_idx'] >= 1) & (df_order['棒次_idx'] <= 9)]
@@ -3630,32 +3679,25 @@ with tab3:
                 for _, r in slot_agg.iterrows():
                     s_1b = r['安打'] - r['二壘安打'] - r['三壘安打'] - r['全壘打']
                     s_woba = (0.69 * r['四壞球'] + 0.88 * s_1b + 1.25 * r['二壘安打'] + 1.59 * r['三壘安打'] + 2.06 * r['全壘打']) / max(1, r['打席'])
-                    
-                    # ✨ 修正 4：棒次計算的 wRC+ 同步升級
                     s_wrc_plus = ((s_woba / lg_woba) - 1) * 200 + 100 if lg_woba > 0 else 100
-                    
-                    slot_data.append({
-                        '球隊': r['球隊'], '棒次': f"第 {int(r['棒次_idx'])} 棒",
-                        '棒次_num': int(r['棒次_idx']), 'wRC+': int(round(s_wrc_plus, 0))
-                    })
-                df_slot_chart = pd.DataFrame(slot_data)
+                    slot_data.append({'球隊': r['球隊'], '棒次': f"第 {int(r['棒次_idx'])} 棒", '棒次_num': int(r['棒次_idx']), 'rOBA+': int(round(s_wrc_plus, 0)), '總打席': int(r['打席'])})
                 
-                chart_slot = alt.Chart(df_slot_chart).mark_bar().encode(
+                chart_slot = alt.Chart(pd.DataFrame(slot_data)).mark_bar(cornerRadiusEnd=4).encode(
                     y=alt.Y('棒次:N', sort=alt.SortField('棒次_num', 'ascending'), title='打擊棒次'),
-                    x=alt.X('wRC+:Q', title='棒次累積生產力 (wRC+)'),
+                    x=alt.X('rOBA+:Q', title='棒次累積生產力 (rOBA+)'),
                     color=alt.Color('球隊:N', scale=alt.Scale(domain=['LAA', 'LAD'], range=['#BA0021', '#005A9C']), legend=alt.Legend(title="球隊")),
-                    yOffset='球隊:N'
+                    yOffset='球隊:N',
+                    tooltip=['球隊', '棒次', 'rOBA+', '總打席']
                 ).properties(height=380)
                 st.altair_chart(chart_slot, use_container_width=True)
-                st.caption("💡 橫條越長代表該棒次累積火力越驚人；若出現極短或負數橫條，即代表教練團在此棒次面臨嚴重的進攻斷層。")
     else: st.info("目前沒有打擊紀錄可以顯示！")
 
     st.markdown("---")
     
-# =======================================================
-    # 🥎 投球成績區塊
     # =======================================================
-    st.markdown("### 🥎 投球成績")
+    # 🥎 投球成績區塊 (BR 格式)
+    # =======================================================
+    st.markdown("### 🥎 投球成績 (Pitching)")
     if not df_p.empty:
         curr_p = p_filter_df.copy()
         if curr_p.empty: 
@@ -3670,103 +3712,119 @@ with tab3:
             elif '四壞' in curr_p.columns: curr_p['四壞球'] = pd.to_numeric(curr_p['四壞'], errors='coerce').fillna(0)
             else: curr_p['四壞球'] = 0
 
+            curr_p = curr_p.sort_values(['賽事階段', '時間戳記'])
+            curr_p['is_GS'] = curr_p.groupby(['賽事階段', '球隊']).cumcount() == 0
+
             curr_p['Season'] = curr_p['賽事階段'].astype(str).apply(lambda x: re.search(r'\[S(\d+)\]', x).group(1) if re.search(r'\[S(\d+)\]', x) else '1')
             player_ewar_p = {}
+            lg_era_base_global = 10.60
             
             for s in curr_p['Season'].unique():
                 s_df = curr_p[curr_p['Season'] == s]
                 s_outs = (s_df['局數(整數)'].sum() * 3) + s_df['局數(出局數)'].sum()
                 s_ip = s_outs / 3.0
-                s_er = s_df['自責分'].sum()
-                s_lg_era = (s_er * 9) / s_ip if s_ip > 0 else 10.60
+                s_lg_era = (s_df['自責分'].sum() * 9) / s_ip if s_ip > 0 else 10.60
+                lg_era_base_global = s_lg_era 
                 
-                # ✨ 修正點：導入替補投手防禦率 (Replacement Level ERA = 聯盟平均 * 1.30)
                 s_rep_level = s_lg_era * 1.30
                 s_era_div = max(1.5, s_lg_era * 0.2)
                 
-                s_agg = s_df.groupby(['球隊', '投手姓名']).agg({
-                    '局數(整數)': 'sum', '局數(出局數)': 'sum', '奪三振': 'sum', '自責分': 'sum', '四壞球': 'sum', '被全壘打': 'sum'
-                }).reset_index()
+                s_agg = s_df.groupby('投手姓名').agg({'局數(整數)': 'sum', '局數(出局數)': 'sum', '奪三振': 'sum', '自責分': 'sum', '四壞球': 'sum', '被全壘打': 'sum'}).reset_index()
                 
                 for _, r in s_agg.iterrows():
-                    outs = (r['局數(整數)'] * 3) + r['局數(出局數)']
-                    ip = outs / 3.0
+                    ip = ((r['局數(整數)'] * 3) + r['局數(出局數)']) / 3.0
                     era = (r['自責分'] * 9) / ip if ip > 0 else float('inf') if r['自責分'] > 0 else 0.0
                     fip = (((13 * r['被全壘打']) + (3 * r['四壞球']) - (2 * r['奪三振'])) / ip) + 3.10 if ip > 0 else float('inf') if (13*r['被全壘打']+3*r['四壞球']-2*r['奪三振'])>0 else 3.10
                     
-                    if curr_s_int >= 6: tra = (era * 0.3) + (fip * 0.7)
-                    else: tra = (era + fip) / 2.0
-                    
-                    # ✨ 修正點：分頁三的在地迴圈同步升級，使用 s_rep_level 減去投手真實表現！
+                    tra = (era * 0.3) + (fip * 0.7) if int(s) >= 6 else (era + fip) / 2.0
                     if ip == 0: ewar = -0.1 * r['自責分'] - 0.05 * r['四壞球']
                     else: ewar = ((s_rep_level - tra) / s_era_div) * (ip / 10)
                     
                     ewar = 0.0 if abs(ewar) < 0.05 else round(ewar, 1)
-                    key = (r['球隊'], r['投手姓名'])
-                    player_ewar_p[key] = player_ewar_p.get(key, 0.0) + ewar
+                    player_ewar_p[r['投手姓名']] = player_ewar_p.get(r['投手姓名'], 0.0) + ewar
 
-            agg_p = curr_p.groupby(['球隊', '投手姓名']).agg({
-                '局數(整數)': 'sum', '局數(出局數)': 'sum', '打者數': 'sum', '投球數': 'sum', '被安打': 'sum', 
-                '被全壘打': 'sum', '四壞球': 'sum', '奪三振': 'sum', '失分': 'sum', '自責分': 'sum'
+            agg_p = curr_p.groupby('投手姓名').agg({
+                '賽事階段': 'nunique', 'is_GS': 'sum', '局數(整數)': 'sum', '局數(出局數)': 'sum', '被安打': 'sum', 
+                '失分': 'sum', '自責分': 'sum', '被全壘打': 'sum', '四壞球': 'sum', '奪三振': 'sum', 
+                '打者數': 'sum', '投球數': 'sum'
             }).reset_index()
             
-            apps = curr_p.groupby(['球隊', '投手姓名']).size().reset_index(name='出賽數')
-            agg_p = pd.merge(agg_p, apps, on=['球隊', '投手姓名'], how='left')
+            last_team_p = curr_p.sort_values('時間戳記').groupby('投手姓名')['球隊'].last()
+            all_team_p = curr_p.sort_values('時間戳記').groupby('投手姓名')['球隊'].unique().apply(lambda x: "/".join(x))
+            
+            agg_p['最新球隊'] = agg_p['投手姓名'].map(last_team_p)
+            agg_p['Tm'] = agg_p['投手姓名'].map(all_team_p)
+            
+            agg_p.rename(columns={
+                '投手姓名': 'Player', '賽事階段': 'G', 'is_GS': 'GS', '被安打': 'H', '失分': 'R', '自責分': 'ER',
+                '被全壘打': 'HR', '四壞球': 'BB', '奪三振': 'SO', '打者數': 'BF'
+            }, inplace=True)
             
             if '勝敗' in curr_p.columns:
-                stats_counts = curr_p.groupby(['球隊', '投手姓名', '勝敗']).size().unstack(fill_value=0).reset_index()
+                p_res_c = curr_p.copy()
+                p_res_c['W'] = p_res_c['勝敗'].astype(str).apply(lambda x: 1 if '勝' in x else 0)
+                p_res_c['L'] = p_res_c['勝敗'].astype(str).apply(lambda x: 1 if '敗' in x else 0)
+                p_res_c['SV'] = p_res_c['勝敗'].astype(str).apply(lambda x: 1 if '救援' in x else 0)
+                p_res_c['HLD'] = p_res_c['勝敗'].astype(str).apply(lambda x: 1 if '中繼' in x else 0)
+                res_agg = p_res_c.groupby('投手姓名')[['W', 'L', 'SV', 'HLD']].sum().reset_index()
+                res_agg.rename(columns={'投手姓名': 'Player'}, inplace=True)
+                agg_p = pd.merge(agg_p, res_agg, on='Player', how='left')
             else:
-                stats_counts = pd.DataFrame(columns=['球隊', '投手姓名', '勝', '敗', '中繼', '救援'])
-                
-            for col in ['勝', '敗', '中繼', '救援']:
-                if col not in stats_counts.columns: stats_counts[col] = 0
-            agg_p = pd.merge(agg_p, stats_counts, on=['球隊', '投手姓名'], how='left')
-            
-            agg_p.rename(columns={'勝': '勝投', '敗': '敗投', '救援': '救援成功', '中繼': '中繼成功'}, inplace=True)
-            
-            total_outs = (agg_p['局數(整數)'] * 3) + agg_p['局數(出局數)']
-            ip_calc = total_outs / 3.0
-            agg_p['實際局數'] = ip_calc
-            agg_p['總局數'] = (total_outs // 3) + (total_outs % 3) / 10.0
-            
-            agg_p['NP'] = agg_p['投球數']
-            agg_p['P/BF'] = (agg_p['NP'] / agg_p['打者數'].replace(0, 1)).fillna(0)
-            
-            agg_p['ERA'] = agg_p.apply(lambda r: (r['自責分'] * 9) / r['實際局數'] if r['實際局數'] > 0 else (float('inf') if r['自責分'] > 0 else 0.0), axis=1)
-            agg_p['FIP'] = agg_p.apply(lambda r: (((13 * r['被全壘打']) + (3 * r['四壞球']) - (2 * r['奪三振'])) / r['實際局數'] + 3.10) if r['實際局數'] > 0 else (float('inf') if (13 * r['被全壘打'] + 3 * r['四壞球'] - 2 * r['奪三振']) > 0 else 3.10), axis=1)
-            
-            agg_p['WHIP'] = ((agg_p['被安打'] + agg_p['四壞球']) / ip_calc.replace(0, 1)).fillna(0)
-            agg_p['K/9'] = ((agg_p['奪三振'] * 9) / ip_calc.replace(0, 1)).fillna(0)
-            agg_p['BB/9'] = ((agg_p['四壞球'] * 9) / ip_calc.replace(0, 1)).fillna(0)
-            agg_p['HR/9'] = ((agg_p['被全壘打'] * 9) / ip_calc.replace(0, 1)).fillna(0)
-            
-            agg_p['eWAR'] = agg_p.apply(lambda r: player_ewar_p.get((r['球隊'], r['投手姓名']), 0.0), axis=1)
-            agg_p['eWAR'] = agg_p['eWAR'].apply(lambda x: 0.0 if abs(x) < 0.05 else round(x, 1))
+                agg_p['W'], agg_p['L'], agg_p['SV'], agg_p['HLD'] = 0, 0, 0, 0
 
-            qual_p = agg_p[agg_p['實際局數'] >= dyn_ip_limit]
+            agg_p['W-L%'] = (agg_p['W'] / (agg_p['W'] + agg_p['L']).replace(0, 1)).fillna(0)
             
+            outs = (agg_p['局數(整數)'] * 3) + agg_p['局數(出局數)']
+            agg_p['IP_calc'] = outs / 3.0
+            agg_p['IP'] = (outs // 3) + (outs % 3) / 10.0
+            
+            agg_p['ERA'] = (agg_p['ER'] * 9 / agg_p['IP_calc'].replace(0, 1)).fillna(0)
+            agg_p['ERA'] = agg_p.apply(lambda r: float('inf') if r['IP_calc'] == 0 and r['ER'] > 0 else r['ERA'], axis=1)
+            
+            agg_p['ERA+'] = (100 * (lg_era_base_global / agg_p['ERA'].replace(0, float('nan')))).fillna(0).astype(int)
+            agg_p['FIP'] = (((13 * agg_p['HR']) + (3 * agg_p['BB']) - (2 * agg_p['SO'])) / agg_p['IP_calc'].replace(0, 1) + 3.10).fillna(3.10)
+            agg_p['WHIP'] = ((agg_p['H'] + agg_p['BB']) / agg_p['IP_calc'].replace(0, 1)).fillna(0)
+            
+            agg_p['H9'] = (agg_p['H'] * 9 / agg_p['IP_calc'].replace(0, 1)).fillna(0)
+            agg_p['HR9'] = (agg_p['HR'] * 9 / agg_p['IP_calc'].replace(0, 1)).fillna(0)
+            agg_p['BB9'] = (agg_p['BB'] * 9 / agg_p['IP_calc'].replace(0, 1)).fillna(0)
+            agg_p['SO9'] = (agg_p['SO'] * 9 / agg_p['IP_calc'].replace(0, 1)).fillna(0)
+            agg_p['SO/BB'] = (agg_p['SO'] / agg_p['BB'].replace(0, 1)).fillna(float('inf'))
+            
+            opp_ab = agg_p['BF'] - agg_p['BB']
+            agg_p['BA'] = (agg_p['H'] / opp_ab.replace(0, 1)).fillna(0)
+            agg_p['OBP'] = ((agg_p['H'] + agg_p['BB']) / agg_p['BF'].replace(0, 1)).fillna(0)
+            opp_1b = agg_p['H'] - agg_p['HR']
+            agg_p['SLG'] = ((opp_1b + 4 * agg_p['HR']) / opp_ab.replace(0, 1)).fillna(0)
+            agg_p['OPS'] = agg_p['OBP'] + agg_p['SLG']
+            agg_p['BAbip'] = ((agg_p['H'] - agg_p['HR']) / (opp_ab - agg_p['SO'] - agg_p['HR']).replace(0, 1)).fillna(0)
+            agg_p['P/BF'] = (agg_p['投球數'] / agg_p['BF'].replace(0, 1)).fillna(0)
+            
+            agg_p['WAR'] = agg_p['Player'].map(player_ewar_p).fillna(0.0)
+
+            qual_p = agg_p[agg_p['IP_calc'] >= dyn_ip_limit]
             if not agg_p.empty:
                 st.markdown(f"#### 👑 聯盟投球領先者 (規定局數: {dyn_ip_limit:.1f})")
                 era_df = qual_p 
-                w_df = agg_p[agg_p['勝投'] > 0]
-                sv_df = agg_p[agg_p['救援成功'] > 0]
-                hld_df = agg_p[agg_p['中繼成功'] > 0]
-                so_df = agg_p[agg_p['奪三振'] > 0]
+                w_df = agg_p[agg_p['W'] > 0]
+                sv_df = agg_p[agg_p['SV'] > 0]
+                hld_df = agg_p[agg_p['HLD'] > 0]
+                so_df = agg_p[agg_p['SO'] > 0]
 
-                name_era = f"[{era_df.sort_values(by=['ERA', '實際局數'], ascending=[True, False]).iloc[0]['球隊']}] {era_df.sort_values(by=['ERA', '實際局數'], ascending=[True, False]).iloc[0]['投手姓名']}" if not era_df.empty else "無(未達標)"
+                name_era = f"[{era_df.sort_values(by=['ERA', 'IP_calc'], ascending=[True, False]).iloc[0]['最新球隊']}] {era_df.sort_values(by=['ERA', 'IP_calc'], ascending=[True, False]).iloc[0]['Player']}" if not era_df.empty else "無(未達標)"
                 val_era = era_df['ERA'].min() if not era_df.empty else float('inf')
 
-                name_w = f"[{w_df.sort_values(by=['勝投', 'ERA'], ascending=[False, True]).iloc[0]['球隊']}] {w_df.sort_values(by=['勝投', 'ERA'], ascending=[False, True]).iloc[0]['投手姓名']}" if not w_df.empty else "無"
-                val_w = w_df['勝投'].max() if not w_df.empty else 0
+                name_w = f"[{w_df.sort_values(by=['W', 'ERA'], ascending=[False, True]).iloc[0]['最新球隊']}] {w_df.sort_values(by=['W', 'ERA'], ascending=[False, True]).iloc[0]['Player']}" if not w_df.empty else "無"
+                val_w = w_df['W'].max() if not w_df.empty else 0
 
-                name_sv = f"[{sv_df.sort_values(by=['救援成功', 'ERA'], ascending=[False, True]).iloc[0]['球隊']}] {sv_df.sort_values(by=['救援成功', 'ERA'], ascending=[False, True]).iloc[0]['投手姓名']}" if not sv_df.empty else "無"
-                val_sv = sv_df['救援成功'].max() if not sv_df.empty else 0
+                name_sv = f"[{sv_df.sort_values(by=['SV', 'ERA'], ascending=[False, True]).iloc[0]['最新球隊']}] {sv_df.sort_values(by=['SV', 'ERA'], ascending=[False, True]).iloc[0]['Player']}" if not sv_df.empty else "無"
+                val_sv = sv_df['SV'].max() if not sv_df.empty else 0
 
-                name_hld = f"[{hld_df.sort_values(by=['中繼成功', 'ERA'], ascending=[False, True]).iloc[0]['球隊']}] {hld_df.sort_values(by=['中繼成功', 'ERA'], ascending=[False, True]).iloc[0]['投手姓名']}" if not hld_df.empty else "無"
-                val_hld = hld_df['中繼成功'].max() if not hld_df.empty else 0
+                name_hld = f"[{hld_df.sort_values(by=['HLD', 'ERA'], ascending=[False, True]).iloc[0]['最新球隊']}] {hld_df.sort_values(by=['HLD', 'ERA'], ascending=[False, True]).iloc[0]['Player']}" if not hld_df.empty else "無"
+                val_hld = hld_df['HLD'].max() if not hld_df.empty else 0
 
-                name_so = f"[{so_df.sort_values(by=['奪三振', 'ERA'], ascending=[False, True]).iloc[0]['球隊']}] {so_df.sort_values(by=['奪三振', 'ERA'], ascending=[False, True]).iloc[0]['投手姓名']}" if not so_df.empty else "無"
-                val_so = so_df['奪三振'].max() if not so_df.empty else 0
+                name_so = f"[{so_df.sort_values(by=['SO', 'ERA'], ascending=[False, True]).iloc[0]['最新球隊']}] {so_df.sort_values(by=['SO', 'ERA'], ascending=[False, True]).iloc[0]['Player']}" if not so_df.empty else "無"
+                val_so = so_df['SO'].max() if not so_df.empty else 0
 
                 lc1, lc2, lc3, lc4, lc5 = st.columns(5)
                 era_str = "∞" if val_era == float('inf') else f"{val_era:.2f}"
@@ -3775,55 +3833,79 @@ with tab3:
                 lc3.metric(f"救援王", f"{int(val_sv)} SV", name_sv)
                 lc4.metric(f"中繼王", f"{int(val_hld)} HLD", name_hld)
                 lc5.metric(f"三振王", f"{int(val_so)} K", name_so)
-
+                
             st.markdown("---")
-            lg_outs = (curr_p['局數(整數)'].sum() * 3) + curr_p['局數(出局數)'].sum()
-            lg_ip = lg_outs / 3.0
-            lg_er = curr_p['自責分'].sum()
-            lg_hr = curr_p['被全壘打'].sum()
-            lg_bb = curr_p['四壞球'].sum()
-            lg_so = curr_p['奪三振'].sum()
-            lg_h = curr_p['被安打'].sum()
-            lg_era = (lg_er * 9) / lg_ip if lg_ip > 0 else float('inf') if lg_er > 0 else 0.0
-            lg_whip = (lg_h + lg_bb) / lg_ip if lg_ip > 0 else 0
-            lg_fip = (((13 * lg_hr) + (3 * lg_bb) - (2 * lg_so)) / lg_ip + 3.10) if lg_ip > 0 else float('inf') if (13*lg_hr+3*lg_bb-2*lg_so)>0 else 3.10
 
-            summary_p = []
-            summary_p.append({'隊伍': '🌎 全聯盟平均', 'ERA': lg_era, 'FIP': lg_fip, 'WHIP': lg_whip, 'K/9': (lg_so * 9 / lg_ip) if lg_ip > 0 else 0, 'BB/9': (lg_bb * 9 / lg_ip) if lg_ip > 0 else 0})
-            for team in TEAMS:
-                t_df = curr_p[curr_p['球隊'] == team]
-                if not t_df.empty:
-                    t_outs = (t_df['局數(整數)'].sum() * 3) + t_df['局數(出局數)'].sum()
-                    t_ip = t_outs / 3.0
-                    t_er = t_df['自責分'].sum()
-                    t_hr = t_df['被全壘打'].sum()
-                    t_bb = t_df['四壞球'].sum()
-                    t_so = t_df['奪三振'].sum()
-                    t_h = t_df['被安打'].sum()
-                    t_era = (t_er * 9) / t_ip if t_ip > 0 else float('inf') if t_er > 0 else 0.0
-                    t_whip = (t_h + t_bb) / t_ip if t_ip > 0 else 0
-                    t_fip = (((13 * t_hr) + (3 * t_bb) - (2 * t_so)) / t_ip + 3.10) if t_ip > 0 else float('inf') if (13*t_hr+3*t_bb-2*t_so)>0 else 3.10
-                    summary_p.append({'隊伍': f"🔴 {team}" if team == "LAA" else f"🔵 {team}", 'ERA': t_era, 'FIP': t_fip, 'WHIP': t_whip, 'K/9': (t_so * 9 / t_ip) if t_ip > 0 else 0, 'BB/9': (t_bb * 9 / t_ip) if t_ip > 0 else 0})
-                    
-            st.markdown("#### ⚖️ 團隊防線對比")
-            df_sum_p = pd.DataFrame(summary_p)
-            st.dataframe(df_sum_p.style.format({'ERA': '{:.2f}', 'FIP': '{:.2f}', 'WHIP': '{:.2f}', 'K/9': '{:.2f}', 'BB/9': '{:.2f}'}), use_container_width=True, hide_index=True, column_config=p_col_config)
+            br_p_cols = ['Player', 'Tm', 'WAR', 'W', 'L', 'W-L%', 'ERA', 'G', 'GS', 'SV', 'IP', 'H', 'R', 'ER', 'HR', 'BB', 'SO', 'BF', 'ERA+', 'FIP', 'WHIP', 'H9', 'HR9', 'BB9', 'SO9', 'SO/BB', 'BA', 'OBP', 'SLG', 'OPS', 'BAbip', 'P/BF']
             
-            show_cols_p = ['球隊', '投手姓名', '出賽數', '勝投', '敗投', '中繼成功', '救援成功', 'ERA', 'FIP', 'WHIP', 'K/9', 'BB/9', 'HR/9', 'P/BF', '總局數', '奪三振', 'eWAR']
-            show_p = agg_p[show_cols_p].copy().sort_values(by=['球隊', 'FIP'], ascending=[True, True])
+            p_format_dict = {
+                'WAR': '{:.1f}', 'W-L%': fmt_rate_t3, 'ERA': lambda x: '∞' if x == float('inf') else f"{x:.2f}",
+                'IP': '{:.1f}', 'ERA+': lambda x: '∞' if x == float('inf') or x > 999 else f"{x:.0f}",
+                'FIP': lambda x: '∞' if x == float('inf') else f"{x:.2f}", 'WHIP': '{:.2f}', 
+                'H9': '{:.2f}', 'HR9': '{:.2f}', 'BB9': '{:.2f}', 'SO9': '{:.2f}', 'SO/BB': lambda x: '∞' if x == float('inf') else f"{x:.2f}",
+                'BA': fmt_rate_t3, 'OBP': fmt_rate_t3, 'SLG': fmt_rate_t3, 'OPS': fmt_rate_t3, 
+                'BAbip': fmt_rate_t3, 'P/BF': '{:.2f}'
+            }
+
+            def style_p_leaders(df):
+                styles = pd.DataFrame('', index=df.index, columns=df.columns)
+                for col in ['WAR', 'W', 'SV', 'G', 'GS', 'IP', 'SO']:
+                    if col in df.columns and col in agg_p.columns:
+                        max_v = agg_p[col].max()
+                        if max_v > 0: styles[col] = np.where((df[col] == max_v) & (df['Player'] != 'Team Total'), 'font-weight: 900; color: #ffcc00;', '')
+                for col in ['ERA', 'FIP', 'WHIP', 'BB9', 'H9', 'HR9', 'P/BF', 'BA', 'OBP', 'SLG', 'OPS', 'BAbip']:
+                    if col in df.columns and not qual_p.empty and col in qual_p.columns:
+                        min_v = qual_p[col].min()
+                        if min_v < float('inf'): styles[col] = np.where((df[col] == min_v) & (df['Player'] != 'Team Total'), 'font-weight: 900; color: #ffcc00;', '')
+                for col in ['ERA+', 'SO9', 'SO/BB']:
+                    if col in df.columns and not qual_p.empty and col in qual_p.columns:
+                        max_v = qual_p[col].max()
+                        if max_v > 0: styles[col] = np.where((df[col] == max_v) & (df['Player'] != 'Team Total'), 'font-weight: 900; color: #ffcc00;', '')
+                return styles
 
             for team in TEAMS:
-                st.markdown(f"#### {team} 個人投手榜")
-                team_df = show_p[show_p['球隊'] == team]
-                if not team_df.empty: 
-                    styled_p = team_df.drop(columns=['球隊']).style.format({
-                        'ERA': lambda x: '∞' if x == float('inf') else f"{x:.2f}",
-                        'FIP': lambda x: '∞' if x == float('inf') else f"{x:.2f}",
-                        'WHIP': '{:.2f}', 'K/9': '{:.2f}', 'BB/9': '{:.2f}', 'HR/9': '{:.2f}', 'P/BF': '{:.2f}',
-                        '總局數': '{:.1f}', 'eWAR': '{:.1f}'
-                    })
-                    st.dataframe(styled_p, use_container_width=True, hide_index=True, column_config=p_col_config)
+                st.markdown(f"#### {team} 投球總表 (以最新效力球隊分類)")
+                team_p = agg_p[agg_p['最新球隊'] == team].copy()
+                if not team_p.empty:
+                    team_raw_p = curr_p[curr_p['球隊'] == team]
+                    t_outs = team_raw_p['局數(整數)'].sum()*3 + team_raw_p['局數(出局數)'].sum()
+                    t_ip_calc = t_outs / 3.0
+                    
+                    t_row = pd.DataFrame([{
+                        'Player': 'Team Total', 'Tm': team, 'WAR': team_p['WAR'].sum(), 'W': team_p['W'].sum(), 'L': team_p['L'].sum(),
+                        'G': team_games_played, 'GS': team_raw_p['is_GS'].sum(), 'SV': team_p['SV'].sum(),
+                        'IP': (t_outs // 3) + (t_outs % 3) / 10.0, 'H': team_raw_p['被安打'].sum(), 'R': team_raw_p['失分'].sum(),
+                        'ER': team_raw_p['自責分'].sum(), 'HR': team_raw_p['被全壘打'].sum(), 'BB': team_raw_p['四壞球'].sum(), 'SO': team_raw_p['奪三振'].sum(),
+                        'BF': team_raw_p['打者數'].sum(), '投球數': team_raw_p['投球數'].sum()
+                    }])
+                    
+                    t_w, t_l, t_er, t_h, t_hr = t_row['W'].iloc[0], t_row['L'].iloc[0], t_row['ER'].iloc[0], t_row['H'].iloc[0], t_row['HR'].iloc[0]
+                    t_bb, t_so, t_bf, t_np = t_row['BB'].iloc[0], t_row['SO'].iloc[0], t_row['BF'].iloc[0], t_row['投球數'].iloc[0]
+                    
+                    t_row['W-L%'] = t_w / (t_w + t_l) if (t_w + t_l) > 0 else 0
+                    t_row['ERA'] = (t_er * 9) / t_ip_calc if t_ip_calc > 0 else 0
+                    t_row['ERA+'] = int(100 * (lg_era_base_global / t_row['ERA'].iloc[0])) if t_row['ERA'].iloc[0] > 0 else 999
+                    t_row['FIP'] = (((13*t_hr) + (3*t_bb) - (2*t_so)) / t_ip_calc) + 3.10 if t_ip_calc > 0 else 3.10
+                    t_row['WHIP'] = (t_h + t_bb) / t_ip_calc if t_ip_calc > 0 else 0
+                    t_row['H9'] = t_h * 9 / t_ip_calc if t_ip_calc > 0 else 0
+                    t_row['HR9'] = t_hr * 9 / t_ip_calc if t_ip_calc > 0 else 0
+                    t_row['BB9'] = t_bb * 9 / t_ip_calc if t_ip_calc > 0 else 0
+                    t_row['SO9'] = t_so * 9 / t_ip_calc if t_ip_calc > 0 else 0
+                    t_row['SO/BB'] = t_so / t_bb if t_bb > 0 else float('inf')
+                    
+                    t_opp_ab = t_bf - t_bb
+                    t_row['BA'] = t_h / t_opp_ab if t_opp_ab > 0 else 0
+                    t_row['OBP'] = (t_h + t_bb) / t_bf if t_bf > 0 else 0
+                    t_row['SLG'] = ((t_h - t_hr) + 4*t_hr) / t_opp_ab if t_opp_ab > 0 else 0
+                    t_row['OPS'] = t_row['OBP'].iloc[0] + t_row['SLG'].iloc[0]
+                    t_row['BAbip'] = (t_h - t_hr) / (t_opp_ab - t_so - t_hr) if (t_opp_ab - t_so - t_hr) > 0 else 0
+                    t_row['P/BF'] = t_np / t_bf if t_bf > 0 else 0
+
+                    final_team_p = pd.concat([team_p[br_p_cols].sort_values('WAR', ascending=False), t_row[br_p_cols]], ignore_index=True)
+                    st.dataframe(final_team_p.style.format(p_format_dict).apply(style_p_leaders, axis=None), use_container_width=True, hide_index=True)
+                else: st.caption("無數據")
     else: st.info("目前沒有投球紀錄可以顯示！")
+
 # ==========================================
 # --- 分頁 4：👤 球員專屬資料庫 (Player Page) ---
 # ==========================================
@@ -3834,27 +3916,24 @@ with tab4:
     import altair as alt
 
     st.header("👤 球員專屬資料庫與球探雷達 (Player Profile & Savant)")
-    st.caption("在這裡您可以查看單一球員的歷年成績、主客場差異、Savant PR，以及專屬的逐場 Game Log！")
+    st.caption("在這裡您可以查看全聯盟球員的歷年成績、主客場差異、Savant PR，以及專屬的逐場 Game Log！")
+
+    # 本地 BR 格式打擊率/上壘率專用去零格式化工具
+    def fmt_br_style_rate(val):
+        if pd.isna(val) or val == float('inf'): return ".000"
+        if val >= 1: return f"{val:.3f}"
+        return f"{val:.3f}".lstrip('0')
 
     if df_b_full.empty and df_p_full.empty:
         st.warning("⚠️ 目前無數據可供分析。")
     else:
-        if 'sv_team' not in st.session_state: st.session_state['sv_team'] = None
         if 'sv_player' not in st.session_state: st.session_state['sv_player'] = None
-        def update_sv_team(): st.session_state['sv_team'] = st.session_state['sv_team_sel']
         def update_sv_player(): st.session_state['sv_player'] = st.session_state['sv_player_sel']
 
-        col_team, col_name = st.columns([1, 2])
-        all_teams = sorted(list(set(df_b_full['球隊'].dropna().unique().tolist() + df_p_full['球隊'].dropna().unique().tolist())))
-        if not all_teams: all_teams = ["無數據"]
-        
-        with col_team:
-            team_idx = all_teams.index(st.session_state['sv_team']) if st.session_state['sv_team'] in all_teams else 0
-            selected_team = st.selectbox("⚾ 選擇球隊", all_teams, index=team_idx, key='sv_team_sel', on_change=update_sv_team)
-            
+        col_name, _ = st.columns([1, 1])
         with col_name:
-            b_names = df_b_full[df_b_full['球隊'] == selected_team]['球員姓名'].dropna().unique().tolist() if not df_b_full.empty else []
-            p_names = df_p_full[df_p_full['球隊'] == selected_team]['投手姓名'].dropna().unique().tolist() if not df_p_full.empty else []
+            b_names = df_b_full['球員姓名'].dropna().unique().tolist() if not df_b_full.empty else []
+            p_names = df_p_full['投手姓名'].dropna().unique().tolist() if not df_p_full.empty else []
             
             opts = []
             if b_names: opts.extend([f"🏏 {n}" for n in sorted(b_names)])
@@ -3863,7 +3942,7 @@ with tab4:
                 opts.extend([f"⚾ {n}" for n in sorted(p_names)])
                 
             if not opts:
-                st.warning("該球隊尚無球員資料。")
+                st.warning("聯盟尚無球員資料。")
                 selected_opt = None
                 selected_player = None
                 is_pitcher = False
@@ -3872,7 +3951,7 @@ with tab4:
                 if st.session_state['sv_player'] in opts:
                     player_idx = opts.index(st.session_state['sv_player'])
                 
-                selected_opt = st.selectbox("👤 選擇球員", opts, index=player_idx, key='sv_player_sel', on_change=update_sv_player)
+                selected_opt = st.selectbox("👤 搜尋全聯盟球員", opts, index=player_idx, key='sv_player_sel', on_change=update_sv_player)
                 
                 if selected_opt == "--- 投手區 ---":
                     st.warning("請選擇一位球員。")
@@ -3883,7 +3962,15 @@ with tab4:
                     selected_player = selected_opt[2:]
 
         if selected_player:
-            full_name = f"[{selected_team}] {selected_player}"
+            # 抓取球員所屬的所有球隊歷史
+            if not is_pitcher:
+                p_history = df_b_full[df_b_full['球員姓名'] == selected_player]
+                team_history = "/".join(p_history.sort_values('時間戳記')['球隊'].unique())
+            else:
+                p_history = df_p_full[df_p_full['投手姓名'] == selected_player]
+                team_history = "/".join(p_history.sort_values('時間戳記')['球隊'].unique())
+                
+            full_name = f"[{team_history}] {selected_player}"
             st.markdown(f"## {full_name}")
             
             awards_won = []
@@ -3891,14 +3978,15 @@ with tab4:
                 for s_idx, cache_data in season_cache.items():
                     mvp, mvp_df, cy, cy_df, ss, ss_df, roty, roty_df, fmvp, fmvp_df, _, all_mlb, is_rs_fin, is_ws_fin = cache_data
                     if is_rs_fin:
-                        if not mvp_df.empty and mvp_df.iloc[0]['球員'] == full_name: awards_won.append("🏅 MVP")
-                        if not cy_df.empty and cy_df.iloc[0]['球員'] == full_name: awards_won.append("⚾ Cy Young")
-                        if not ss_df.empty and ss_df.iloc[0]['球員'] == full_name: awards_won.append("🏏 SS")
-                        if not roty_df.empty and roty_df.iloc[0]['球員'] == full_name: awards_won.append("👶 ROY")
-                        awards_won.extend(["🌟 1st Team"] * all_mlb.count(full_name))
+                        if not mvp_df.empty and selected_player in str(mvp_df.iloc[0]['球員']): awards_won.append("🏅 MVP")
+                        if not cy_df.empty and selected_player in str(cy_df.iloc[0]['球員']): awards_won.append("⚾ Cy Young")
+                        if not ss_df.empty and selected_player in str(ss_df.iloc[0]['球員']): awards_won.append("🏏 SS")
+                        if not roty_df.empty and selected_player in str(roty_df.iloc[0]['球員']): awards_won.append("👶 ROY")
+                        for mlb_p in all_mlb:
+                            if selected_player in str(mlb_p): awards_won.append("🌟 1st Team")
                     if is_ws_fin:
-                        if not fmvp_df.empty and fmvp_df.iloc[0]['球員'] == full_name: awards_won.append("🌟 FMVP")
-                        ws_df = df_p_full[df_p_full['賽事階段'].astype(str).str.contains(f"\[S{s_idx}\] 世界大賽", regex=False)]
+                        if not fmvp_df.empty and selected_player in str(fmvp_df.iloc[0]['球員']): awards_won.append("🌟 FMVP")
+                        ws_df = df_p_full[df_p_full['賽事階段'].astype(str).str.contains(f"\\[S{s_idx}\\] 世界大賽", regex=False)]
                         if not ws_df.empty:
                             laa_w, lad_w = 0, 0
                             for stg, grp in ws_df.groupby('賽事階段', sort=False):
@@ -3908,13 +3996,13 @@ with tab4:
                             
                             played_this_season = False
                             if is_pitcher:
-                                s_sub = df_p_full[(df_p_full['球隊']==selected_team) & (df_p_full['投手姓名']==selected_player) & (df_p_full['賽事階段'].astype(str).str.contains(f"\[S{s_idx}\]", regex=False))]
-                                if not s_sub.empty: played_this_season = True
+                                s_sub = df_p_full[(df_p_full['投手姓名']==selected_player) & (df_p_full['賽事階段'].astype(str).str.contains(f"\\[S{s_idx}\\]", regex=False))]
+                                if not s_sub.empty and s_sub.iloc[-1]['球隊'] == ws_winner: played_this_season = True
                             else:
-                                s_sub = df_b_full[(df_b_full['球隊']==selected_team) & (df_b_full['球員姓名']==selected_player) & (df_b_full['賽事階段'].astype(str).str.contains(f"\[S{s_idx}\]", regex=False))]
-                                if not s_sub.empty: played_this_season = True
+                                s_sub = df_b_full[(df_b_full['球員姓名']==selected_player) & (df_b_full['賽事階段'].astype(str).str.contains(f"\\[S{s_idx}\\]", regex=False))]
+                                if not s_sub.empty and s_sub.iloc[-1]['球隊'] == ws_winner: played_this_season = True
                                 
-                            if ws_winner == selected_team and played_this_season:
+                            if played_this_season:
                                 awards_won.append("💍 WS Champ")
 
             if awards_won:
@@ -3931,7 +4019,7 @@ with tab4:
                 if df_aw.empty: return None
                 players = df_aw['球員'].tolist()
                 for i, p in enumerate(players):
-                    if p_name in p:
+                    if p_name in str(p):
                         rank = i + 1
                         if rank == 1: return aw_name
                         else: return f"{aw_name}-{rank}"
@@ -3946,7 +4034,7 @@ with tab4:
             # 🏏 打者邏輯
             # ===============================================
             if not is_pitcher:
-                b_sub_all = df_b_full[(df_b_full['球隊'] == selected_team) & (df_b_full['球員姓名'] == selected_player)].copy()
+                b_sub_all = df_b_full[df_b_full['球員姓名'] == selected_player].copy()
                 b_sub = b_sub_all[b_sub_all['賽事階段'].astype(str).str.contains(filter_str, regex=False)].copy()
                 
                 if not b_sub_all.empty:
@@ -3975,6 +4063,10 @@ with tab4:
                         ops = obp + slg
                         roba = (0.69*bb + 0.88*h1 + 1.25*h2 + 1.59*h3 + 2.06*hr) / pa if pa > 0 else 0
                         
+                        tm_str = "/".join(df.sort_values('時間戳記')['球隊'].unique()) if not is_career else "Multi"
+                        if not is_career and len(df.sort_values('時間戳記')['球隊'].unique()) == 1:
+                            tm_str = df.sort_values('時間戳記').iloc[0]['球隊']
+                            
                         lg_obp, lg_slg = 0.320, 0.400
                         if not is_career:
                             s_pref = f"[S{s_idx}]"
@@ -4014,21 +4106,19 @@ with tab4:
                             mvp, mvp_df, cy, cy_df, ss, ss_df, roty, roty_df, fmvp, fmvp_df, _, all_mlb, is_rs_fin, is_ws_fin = season_cache[int(s_idx)]
                             if "例行賽" in filter_str and is_rs_fin:
                                 for aw_name, df_aw in [('MVP', mvp_df), ('ROY', roty_df)]:
-                                    r_str = get_award_rank(df_aw, aw_name, full_name)
+                                    r_str = get_award_rank(df_aw, aw_name, selected_player)
                                     if r_str: aw_list.append(r_str)
-                                if not ss_df.empty and ss_df.iloc[0]['球員'] == full_name: aw_list.append("SS")
-                                if full_name in all_mlb:
-                                    cnt = all_mlb.count(full_name)
-                                    if cnt > 1: aw_list.append(f"1st Team(x{cnt})")
-                                    else: aw_list.append("1st Team")
+                                if not ss_df.empty and selected_player in str(ss_df.iloc[0]['球員']): aw_list.append("SS")
+                                for mlb_p in all_mlb:
+                                    if selected_player in str(mlb_p): aw_list.append("1st Team")
                             elif "世界大賽" in filter_str and is_ws_fin:
-                                f_str = get_award_rank(fmvp_df, 'FMVP', full_name)
+                                f_str = get_award_rank(fmvp_df, 'FMVP', selected_player)
                                 if f_str: aw_list.append(f_str)
                         
                         aw_str = ", ".join(aw_list) if aw_list and not is_career else ""
                         g = df['賽事階段'].nunique()
                         
-                        return {'Season': label, 'WAR': ewar, 'G': g, 'PA': int(pa), 'AB': int(ab), 'R': int(r), 
+                        return {'Season': label, 'Tm': tm_str, 'WAR': ewar, 'G': g, 'PA': int(pa), 'AB': int(ab), 'R': int(r), 
                                 'H': int(h), '2B': int(h2), '3B': int(h3), 'HR': int(hr), 'RBI': int(rbi), 'SB': int(sb), 
                                 'BB': int(bb), 'SO': int(so), 'BA': ba, 'OBP': obp, 'SLG': slg, 'OPS': ops, 
                                 'OPS+': round(ops_plus), 'wRC+': round(wrc_plus), 'rOBA': roba, 'Awards': aw_str}
@@ -4081,13 +4171,14 @@ with tab4:
                         yrs = len(sub_played_seasons)
                         c_dict = calc_b_stats(b_sub, f"{yrs}年總和 (Career)", "Career", is_career=True)
                         c_dict['WAR'] = 0.0 if abs(career_war) < 0.05 else round(career_war, 1)
+                        c_dict['Tm'] = "Multi" if b_sub['球隊'].nunique() > 1 else b_sub.iloc[0]['球隊']
                         stats_list.append(c_dict)
                         df_disp = pd.DataFrame(stats_list)
                         st.dataframe(df_disp.style.format({'WAR': '{:.1f}', 'BA': '{:.3f}', 'OBP': '{:.3f}', 'SLG': '{:.3f}', 'OPS': '{:.3f}', 'OPS+': '{:.0f}', 'wRC+': '{:.0f}', 'rOBA': '{:.3f}'}), use_container_width=True)
 
                         st.markdown("### 🏟️ 主客場拆分 (Home/Away Splits)")
-                        b_sub_home = b_sub[b_sub['賽事階段'].apply(lambda x: global_home_dict.get(x, "") == selected_team)]
-                        b_sub_away = b_sub[b_sub['賽事階段'].apply(lambda x: global_home_dict.get(x, "") != selected_team)]
+                        b_sub_home = b_sub[b_sub.apply(lambda r: global_home_dict.get(r['賽事階段'], "") == r['球隊'], axis=1)]
+                        b_sub_away = b_sub[b_sub.apply(lambda r: global_home_dict.get(r['賽事階段'], "") != r['球隊'], axis=1)]
                         spl_list = []
                         if not b_sub_home.empty: spl_list.append(calc_b_splits(b_sub_home, "🏠 主場 (Home)"))
                         if not b_sub_away.empty: spl_list.append(calc_b_splits(b_sub_away, "✈️ 客場 (Away)"))
@@ -4095,6 +4186,15 @@ with tab4:
                             st.dataframe(pd.DataFrame(spl_list).style.format({'WAR': '{:.1f}', 'BA': '{:.3f}', 'OBP': '{:.3f}', 'SLG': '{:.3f}', 'OPS': '{:.3f}', 'BABIP': '{:.3f}'}), use_container_width=True)
                         else:
                             st.info("無主客場數據。")
+                            
+                        # 球隊拆分
+                        if b_sub['球隊'].nunique() > 1:
+                            st.markdown("### 🔀 球隊拆分 (Team Splits)")
+                            tm_spl_list = []
+                            for tm in b_sub['球隊'].unique():
+                                tm_df = b_sub[b_sub['球隊'] == tm]
+                                tm_spl_list.append(calc_b_splits(tm_df, f"{tm}"))
+                            st.dataframe(pd.DataFrame(tm_spl_list).style.format({'WAR': '{:.1f}', 'BA': '{:.3f}', 'OBP': '{:.3f}', 'SLG': '{:.3f}', 'OPS': '{:.3f}', 'BABIP': '{:.3f}'}), use_container_width=True)
 
                         st.markdown("### 📈 Savant PR 雷達 (Percentile Rankings)")
                         savant_seasons = ["生涯總成績"] + [f"Season {s}" for s in sub_played_seasons]
@@ -4111,7 +4211,7 @@ with tab4:
                             for c in ['打席','打數','安打','二壘安打','三壘安打','全壘打','打點','四壞球','三振']: 
                                 if c not in b_pool.columns: b_pool[c] = 0
                                 b_pool[c] = pd.to_numeric(b_pool[c], errors='coerce').fillna(0)
-                            b_agg = b_pool.groupby(['球隊', '球員姓名']).sum(numeric_only=True).reset_index()
+                            b_agg = b_pool.groupby('球員姓名').sum(numeric_only=True).reset_index()
                             b_agg = b_agg[b_agg['打席'] > 0].copy()
                             min_pa_savant = 5 if target_savant_season != "生涯總成績" else 10
                             b_agg['Qual'] = b_agg['打席'] >= min_pa_savant
@@ -4172,7 +4272,7 @@ with tab4:
 
                             c_rad, c_desc = st.columns([2, 1])
                             with c_rad:
-                                p_df = b_agg[(b_agg['球隊'] == selected_team) & (b_agg['球員姓名'] == selected_player)]
+                                p_df = b_agg[b_agg['球員姓名'] == selected_player]
                                 if not p_df.empty:
                                     p_data = p_df.iloc[0]
                                     is_q = p_data['Qual']
@@ -4223,10 +4323,10 @@ with tab4:
                             
                             stg_cl = clean_stage_name(r['賽事階段'])
                             h_team = global_home_dict.get(r['賽事階段'], "")
-                            loc = "主場" if h_team == selected_team else "客場"
+                            loc = "主場" if h_team == r['球隊'] else "客場"
                             
                             gl_list.append({
-                                '場次': stg_cl, '主客': loc, '打席': int(pa), '打數': int(ab), '得分': int(run), '安打': int(h),
+                                '球隊': r['球隊'], '場次': stg_cl, '主客': loc, '打席': int(pa), '打數': int(ab), '得分': int(run), '安打': int(h),
                                 '二安': int(h2), '三安': int(h3), '全壘打': int(hr), '打點': int(rbi), '四壞': int(bb), '三振': int(so),
                                 '打擊率': ba, '上壘率': obp, '長打率': slg, 'wOBA': woba
                             })
@@ -4237,7 +4337,7 @@ with tab4:
 
                 with t_slot_split:
                     st.markdown("### 🔄 個人生涯各棒次生產力拆分 (Career Splits by Lineup Slot)")
-                    st.caption("✨ 此圖表統計球員生涯在各打序（1~9棒）的真實表現，已修正為 **正統魔球 wRC+**。長條越長代表排在該棒次時的火力越狂暴。滑鼠懸停可直接解鎖極致詳細數據！")
+                    st.caption("✨ 此圖表統計球員生涯在各打序（1~9棒）的真實表現，已修正為 **正統魔球 wRC+**。長條越長代表火力越狂暴，**長條越胖代表在該棒次的打席數越多**！")
                     
                     df_slot = b_sub_all.copy()
                     if not df_slot.empty:
@@ -4279,9 +4379,11 @@ with tab4:
                                 })
                             
                             df_p_split = pd.DataFrame(p_split_data)
+                            
                             chart_p_split = alt.Chart(df_p_split).mark_bar(color='#fc8d59', cornerRadiusEnd=4).encode(
                                 y=alt.Y('棒次:N', sort=alt.SortField('棒次_num', 'ascending'), title='打擊順序 (Lineup Slot)'),
                                 x=alt.X('wRC+:Q', title='該棒次累積火力指數 (wRC+)'),
+                                size=alt.Size('總打席:Q', scale=alt.Scale(range=[8, 35]), legend=alt.Legend(title="打席數 (胖瘦)")),
                                 tooltip=[
                                     alt.Tooltip('棒次:N', title='打序'), alt.Tooltip('wRC+:Q', title='wRC+'), alt.Tooltip('OPS:N', title='OPS'),
                                     alt.Tooltip('打擊率:N'), alt.Tooltip('上壘率:N'), alt.Tooltip('長打率:N'),
@@ -4295,64 +4397,66 @@ with tab4:
                     else: st.info("該球員無出賽紀錄。")
 
                 with t_hof:
-                    st.markdown("### 🏛️ 名人堂神主牌預測儀 (JAWS & HOF Monitor)")
-                    peak_war = sum(sorted(s_wars, reverse=True)[:7]) if s_wars else 0.0
-                    jaws = (career_war + peak_war) / 2.0
-                    hof_status = "✨ 首爵入選 (First Ballot)" if jaws >= 40 else "🏛️ 穩健入選 (Solid HOFer)" if jaws >= 30 else "🤔 邊緣徘徊 (Borderline)" if jaws >= 20 else "🏃 尚需努力"
-                    
-                    hj1, hj2, hj3 = st.columns(3)
-                    hj1.metric("JAWS 分數", f"{jaws:.1f}", hof_status)
-                    hj2.metric("生涯總 eWAR", f"{career_war:.1f}")
-                    hj3.metric("7年巔峰 eWAR (WAR7)", f"{peak_war:.1f}")
-                    st.progress(max(0.0, min(1.0, jaws / 30.0)))
-
-                    st.markdown("---")
-                    st.markdown("### 🧬 Bill James 歷史相似度分數 (Similarity Scores)")
-                    st.caption("滿分為 1000，扣分越少代表生涯數據軌跡越相似。**（✨ 已導入強化版懲罰權重，嚴格篩選同型態球員）**")
-                    
-                    df_b_all = df_b_full[df_b_full['賽事階段'].astype(str).str.contains(filter_str, regex=False)].copy()
-                    for c in ['打席','打數','得分','安打','二壘安打','三壘安打','全壘打','打點','四壞球','三振','盜壘']:
-                        df_b_all[c] = pd.to_numeric(df_b_all.get(c, 0), errors='coerce').fillna(0)
-                    
-                    sim_agg = df_b_all.groupby(['球隊', '球員姓名']).agg({'賽事階段':'nunique', '打席':'sum', '打數':'sum', '得分':'sum', '安打':'sum', '二壘安打':'sum', '三壘安打':'sum', '全壘打':'sum', '打點':'sum', '四壞球':'sum', '三振':'sum', '盜壘':'sum', '守位': lambda x: x.value_counts().index[0] if '守位' in df_b_all.columns and not x.empty else 'DH'}).reset_index()
-                    tgt = sim_agg[(sim_agg['球隊'] == selected_team) & (sim_agg['球員姓名'] == selected_player)]
-                    
-                    if tgt.empty: st.info("尚無數據進行相似度比對。")
+                    if filter_str == "世界大賽":
+                        st.warning("⚠️ **【BR 數據庫規則】** 依據 Baseball-Reference 標準，名人堂 (JAWS) 與歷史相似度 (Similarity Scores) **完全不計入季後賽數據**。請將上方賽事類型切換為「例行賽」以解鎖此區塊分析！")
                     else:
-                        tgt = tgt.iloc[0]
-                        sim_scores = []
-                        for _, r in sim_agg.iterrows():
-                            if r['球員姓名'] == selected_player and r['球隊'] == selected_team: continue
-                            pos_penalty = abs({"C": 8, "SS": 7, "2B": 6, "CF": 5, "3B": 4, "RF": 3, "LF": 2, "1B": 1, "DH": 0}.get(tgt['守位'], 0) - {"C": 8, "SS": 7, "2B": 6, "CF": 5, "3B": 4, "RF": 3, "LF": 2, "1B": 1, "DH": 0}.get(r['守位'], 0)) * 40
-                            
-                            # ✨ 強化版打者相似度懲罰 (大幅提升全壘打、打擊率、盜壘的扣分比重，確保型態一致)
-                            diff = (
-                                abs(r['賽事階段'] - tgt['賽事階段'])*2 + 
-                                abs(r['打數'] - tgt['打數'])/20 + 
-                                abs(r['得分'] - tgt['得分'])/5 + 
-                                abs(r['安打'] - tgt['安打'])/5 + 
-                                abs(r['二壘安打'] - tgt['二壘安打'])/2 + 
-                                abs(r['三壘安打'] - tgt['三壘安打']) + 
-                                abs(r['全壘打'] - tgt['全壘打'])*3 + 
-                                abs(r['打點'] - tgt['打點'])/5 + 
-                                abs(r['四壞球'] - tgt['四壞球'])/10 + 
-                                abs(r['三振'] - tgt['三振'])/20 + 
-                                abs(r['盜壘'] - tgt['盜壘'])*2 + 
-                                abs((r['安打']/max(1,r['打數'])) - (tgt['安打']/max(1,tgt['打數'])))*2000 + 
-                                pos_penalty
-                            )
-                            sim_scores.append({'球員': f"[{r['球隊']}] {r['球員姓名']}", '守位': r['守位'], '相似度': 1000 - diff, 'AVG': r['安打']/max(1,r['打數']), 'HR': int(r['全壘打'])}) 
-                        if sim_scores: st.dataframe(pd.DataFrame(sim_scores).sort_values('相似度', ascending=False).head(5).style.format({'相似度': '{:.1f}', 'AVG': '{:.3f}'}), use_container_width=True, hide_index=True)
+                        st.markdown("### 🏛️ 名人堂神主牌預測儀 (JAWS & HOF Monitor)")
+                        peak_war = sum(sorted(s_wars, reverse=True)[:7]) if s_wars else 0.0
+                        jaws = (career_war + peak_war) / 2.0
+                        hof_status = "✨ 首爵入選 (First Ballot)" if jaws >= 40 else "🏛️ 穩健入選 (Solid HOFer)" if jaws >= 30 else "🤔 邊緣徘徊 (Borderline)" if jaws >= 20 else "🏃 尚需努力"
+                        
+                        hj1, hj2, hj3 = st.columns(3)
+                        hj1.metric("JAWS 分數", f"{jaws:.1f}", hof_status)
+                        hj2.metric("生涯總 eWAR", f"{career_war:.1f}")
+                        hj3.metric("7年巔峰 eWAR (WAR7)", f"{peak_war:.1f}")
+                        st.progress(max(0.0, min(1.0, jaws / 30.0)))
+    
+                        st.markdown("---")
+                        st.markdown("### 🧬 Bill James 歷史相似度分數 (Similarity Scores)")
+                        st.caption("滿分為 1000，扣分越少代表生涯數據軌跡越相似。**（✨ 已導入強化版懲罰權重，嚴格篩選同型態球員）**")
+                        
+                        df_b_all = df_b_full[df_b_full['賽事階段'].astype(str).str.contains(filter_str, regex=False)].copy()
+                        for c in ['打席','打數','得分','安打','二壘安打','三壘安打','全壘打','打點','四壞球','三振','盜壘']:
+                            df_b_all[c] = pd.to_numeric(df_b_all.get(c, 0), errors='coerce').fillna(0)
+                        
+                        sim_agg = df_b_all.groupby('球員姓名').agg({'賽事階段':'nunique', '打席':'sum', '打數':'sum', '得分':'sum', '安打':'sum', '二壘安打':'sum', '三壘安打':'sum', '全壘打':'sum', '打點':'sum', '四壞球':'sum', '三振':'sum', '盜壘':'sum', '守位': lambda x: x.value_counts().index[0] if '守位' in df_b_all.columns and not x.empty else 'DH'}).reset_index()
+                        tgt = sim_agg[sim_agg['球員姓名'] == selected_player]
+                        
+                        if tgt.empty: st.info("尚無數據進行相似度比對。")
+                        else:
+                            tgt = tgt.iloc[0]
+                            sim_scores = []
+                            for _, r in sim_agg.iterrows():
+                                if r['球員姓名'] == selected_player: continue
+                                pos_penalty = abs({"C": 8, "SS": 7, "2B": 6, "CF": 5, "3B": 4, "RF": 3, "LF": 2, "1B": 1, "DH": 0}.get(tgt['守位'], 0) - {"C": 8, "SS": 7, "2B": 6, "CF": 5, "3B": 4, "RF": 3, "LF": 2, "1B": 1, "DH": 0}.get(r['守位'], 0)) * 40
+                                
+                                diff = (
+                                    abs(r['賽事階段'] - tgt['賽事階段'])*2 + 
+                                    abs(r['打數'] - tgt['打數'])/20 + 
+                                    abs(r['得分'] - tgt['得分'])/5 + 
+                                    abs(r['安打'] - tgt['安打'])/5 + 
+                                    abs(r['二壘安打'] - tgt['二壘安打'])/2 + 
+                                    abs(r['三壘安打'] - tgt['三壘安打']) + 
+                                    abs(r['全壘打'] - tgt['全壘打'])*3 + 
+                                    abs(r['打點'] - tgt['打點'])/5 + 
+                                    abs(r['四壞球'] - tgt['四壞球'])/10 + 
+                                    abs(r['三振'] - tgt['三振'])/20 + 
+                                    abs(r['盜壘'] - tgt['盜壘'])*2 + 
+                                    abs((r['安打']/max(1,r['打數'])) - (tgt['安打']/max(1,tgt['打數'])))*2000 + 
+                                    pos_penalty
+                                )
+                                sim_scores.append({'球員': f"{r['球員姓名']}", '守位': r['守位'], '相似度': 1000 - diff, 'AVG': r['安打']/max(1,r['打數']), 'HR': int(r['全壘打'])}) 
+                            if sim_scores: st.dataframe(pd.DataFrame(sim_scores).sort_values('相似度', ascending=False).head(5).style.format({'相似度': '{:.1f}', 'AVG': '{:.3f}'}), use_container_width=True, hide_index=True)
 
             # ===============================================
-            # 🥎 投手邏輯區塊 (完美套用 Savant PR 與 Game Log 新版架構)
+            # 🥎 投手邏輯區塊 
             # ===============================================
             else: 
-                p_sub_all = df_p_full[(df_p_full['球隊'] == selected_team) & (df_p_full['投手姓名'] == selected_player)].copy()
+                p_sub_all = df_p_full[df_p_full['投手姓名'] == selected_player].copy()
                 p_sub = p_sub_all[p_sub_all['賽事階段'].astype(str).str.contains(filter_str, regex=False)].copy()
                 
                 if not p_sub_all.empty:
-                    for c in ['局數(整數)', '局數(出局數)', '奪三振', '失分', '自責分', '四壞球', '被全壘打', '被安打', '投球數', '被二壘安打', '被三壘安打']: 
+                    for c in ['局數(整數)', '局數(出局數)', '奪三振', '失分', '自責分', '四壞球', '被安打', '被全壘打', '投球數', '被二壘安打', '被三壘安打']: 
                         if c not in p_sub_all.columns: p_sub_all[c] = 0
                         p_sub_all[c] = pd.to_numeric(p_sub_all[c], errors='coerce').fillna(0)
                     p_sub_all['Season'] = p_sub_all['賽事階段'].astype(str).apply(lambda x: re.search(r'\[S(\d+)\]', x).group(1) if re.search(r'\[S(\d+)\]', x) else '1')
@@ -4361,7 +4465,7 @@ with tab4:
                     played_seasons = []
 
                 if not p_sub.empty:
-                    for c in ['局數(整數)', '局數(出局數)', '奪三振', '失分', '自責分', '四壞球', '被全壘打', '被安打', '投球數', '被二壘安打', '被三壘安打']: 
+                    for c in ['局數(整數)', '局數(出局數)', '奪三振', '失分', '自責分', '四壞球', '被安打', '被全壘打', '投球數', '被二壘安打', '被三壘安打']: 
                         if c not in p_sub.columns: p_sub[c] = 0
                         p_sub[c] = pd.to_numeric(p_sub[c], errors='coerce').fillna(0)
                     p_sub['勝'] = p_sub['勝敗'].astype(str).apply(lambda x: 1 if '勝' in x else 0)
@@ -4378,13 +4482,14 @@ with tab4:
                         gs = 0
                         stages = df['賽事階段'].unique()
                         for stg in stages:
-                            g_full = df_p_full[(df_p_full['賽事階段'] == stg) & (df_p_full['球隊'] == selected_team)].sort_values('時間戳記')
+                            g_full = df_p_full[df_p_full['賽事階段'] == stg].sort_values('時間戳記')
                             if not g_full.empty and g_full.iloc[0]['投手姓名'] == selected_player: gs += 1
                         
                         outs = int(df['局數(整數)'].sum()*3 + df['局數(出局數)'].sum())
                         ip_calc = outs / 3.0
                         ip_disp = (outs // 3) + (outs % 3) / 10.0 
                         
+                        # ✨ 修復此處因 get 誤用造成的 SyntaxError
                         h, r, er = df['被安打'].sum(), df['失分'].sum(), df['自責分'].sum()
                         hr, bb, so = df['被全壘打'].sum(), df['四壞球'].sum(), df['奪三振'].sum()
                         bf = outs + h + bb
@@ -4397,7 +4502,12 @@ with tab4:
                         hr9 = (hr * 9) / ip_calc if ip_calc > 0 else 0.0
                         bb9 = (bb * 9) / ip_calc if ip_calc > 0 else 0.0
                         so9 = (so * 9) / ip_calc if ip_calc > 0 else 0.0
-                        so_bb = so / bb if bb > 0 else so
+                        
+                        so_bb = so / bb if bb > 0 else float('inf')
+                        
+                        tm_str = "/".join(df.sort_values('時間戳記')['球隊'].unique()) if not is_career else "Multi"
+                        if not is_career and len(df.sort_values('時間戳記')['球隊'].unique()) == 1:
+                            tm_str = df.sort_values('時間戳記').iloc[0]['球隊']
                         
                         lg_era, lg_era_base = 10.60, 10.60
                         if not is_career:
@@ -4415,7 +4525,6 @@ with tab4:
                         
                         era_plus = 100 * (lg_era / era) if era > 0 else (999 if era == 0 and ip_calc > 0 else 0)
                         
-                        # ✨ 修正：同步使用 1.30 替補基準線計算投手生涯 WAR
                         s_rep_level = lg_era_base * 1.30
                         era_div = max(1.5, lg_era_base * 0.2)
                         tra = (era + fip) / 2.0
@@ -4428,16 +4537,17 @@ with tab4:
                             mvp, mvp_df, cy, cy_df, ss, ss_df, roty, roty_df, fmvp, fmvp_df, _, all_mlb, is_rs_fin, is_ws_fin = season_cache[int(s_idx)]
                             if "例行賽" in filter_str and is_rs_fin:
                                 for aw_name, df_aw in [('CYA', cy_df), ('MVP', mvp_df), ('ROY', roty_df)]:
-                                    r_str = get_award_rank(df_aw, aw_name, full_name)
+                                    r_str = get_award_rank(df_aw, aw_name, selected_player)
                                     if r_str: aw_list.append(r_str)
-                                if full_name in all_mlb: aw_list.append("1st Team")
+                                for mlb_p in all_mlb:
+                                    if selected_player in str(mlb_p): aw_list.append("1st Team")
                             elif "世界大賽" in filter_str and is_ws_fin:
-                                f_str = get_award_rank(fmvp_df, 'FMVP', full_name)
+                                f_str = get_award_rank(fmvp_df, 'FMVP', selected_player)
                                 if f_str: aw_list.append(f_str)
                                 
                         aw_str = ", ".join(aw_list) if aw_list and not is_career else ""
                         
-                        return {'Season': label, 'WAR': ewar, 'W': int(w), 'L': int(l), 'W-L%': wl_pct, 
+                        return {'Season': label, 'Tm': tm_str, 'WAR': ewar, 'W': int(w), 'L': int(l), 'W-L%': wl_pct, 
                                 'ERA': era, 'G': g, 'GS': gs, 'SV': int(sv), 'IP': ip_disp, 
                                 'H': int(h), 'R': int(r), 'ER': int(er), 'HR': int(hr), 'BB': int(bb), 
                                 'BF': int(bf), 'ERA+': round(era_plus), 'FIP': fip, 'WHIP': whip, 
@@ -4497,13 +4607,23 @@ with tab4:
                         yrs = len(sub_played_seasons)
                         c_dict = calc_p_stats(p_sub, f"{yrs}年總和 (Career)", "Career", is_career=True)
                         c_dict['WAR'] = 0.0 if abs(career_war) < 0.05 else round(career_war, 1)
+                        c_dict['Tm'] = "Multi" if p_sub['球隊'].nunique() > 1 else p_sub.iloc[0]['球隊']
                         stats_list.append(c_dict)
                         df_disp = pd.DataFrame(stats_list)
-                        st.dataframe(df_disp.style.format({'WAR': '{:.1f}', 'W-L%': '{:.3f}', 'ERA': '{:.2f}', 'FIP': '{:.2f}', 'WHIP': '{:.2f}', 'IP': '{:.1f}', 'H9': '{:.1f}', 'HR9': '{:.1f}', 'BB9': '{:.1f}', 'SO9': '{:.1f}', 'SO/BB': '{:.2f}', 'ERA+': '{:.0f}'}), use_container_width=True)
+                        
+                        st.dataframe(df_disp.style.format({
+                            'WAR': '{:.1f}', 'W-L%': '{:.3f}', 
+                            'ERA': lambda x: '∞' if x == float('inf') else f"{x:.2f}", 
+                            'FIP': lambda x: '∞' if x == float('inf') else f"{x:.2f}", 
+                            'WHIP': lambda x: '∞' if x == float('inf') else f"{x:.2f}", 
+                            'IP': '{:.1f}', 'H9': '{:.1f}', 'HR9': '{:.1f}', 'BB9': '{:.1f}', 'SO9': '{:.1f}', 
+                            'SO/BB': lambda x: '∞' if x == float('inf') else f"{x:.2f}", 
+                            'ERA+': lambda x: '∞' if x == float('inf') or x > 999 else f"{x:.0f}"
+                        }), use_container_width=True)
 
                         st.markdown("### 🏟️ 主客場拆分 (Home/Away Splits)")
-                        p_sub_home = p_sub[p_sub['賽事階段'].apply(lambda x: global_home_dict.get(x, "") == selected_team)]
-                        p_sub_away = p_sub[p_sub['賽事階段'].apply(lambda x: global_home_dict.get(x, "") != selected_team)]
+                        p_sub_home = p_sub[p_sub.apply(lambda r: global_home_dict.get(r['賽事階段'], "") == r['球隊'], axis=1)]
+                        p_sub_away = p_sub[p_sub.apply(lambda r: global_home_dict.get(r['賽事階段'], "") != r['球隊'], axis=1)]
                         spl_list = []
                         if not p_sub_home.empty: spl_list.append(calc_p_splits(p_sub_home, "🏠 主場 (Home)"))
                         if not p_sub_away.empty: spl_list.append(calc_p_splits(p_sub_away, "✈️ 客場 (Away)"))
@@ -4511,6 +4631,87 @@ with tab4:
                             st.dataframe(pd.DataFrame(spl_list).style.format({'WAR': '{:.1f}', 'IP': '{:.1f}', 'BA': '{:.3f}', 'OBP': '{:.3f}', 'SLG': '{:.3f}', 'OPS': '{:.3f}', 'BABIP': '{:.3f}'}), use_container_width=True)
                         else:
                             st.info("無主客場數據。")
+                            
+                        # 球隊拆分
+                        if p_sub['球隊'].nunique() > 1:
+                            st.markdown("### 🔀 球隊拆分 (Team Splits)")
+                            tm_spl_list = []
+                            for tm in p_sub['球隊'].unique():
+                                tm_df = p_sub[p_sub['球隊'] == tm]
+                                tm_spl_list.append(calc_p_splits(tm_df, f"{tm}"))
+                            st.dataframe(pd.DataFrame(tm_spl_list).style.format({'WAR': '{:.1f}', 'IP': '{:.1f}', 'BA': '{:.3f}', 'OBP': '{:.3f}', 'SLG': '{:.3f}', 'OPS': '{:.3f}', 'BABIP': '{:.3f}'}), use_container_width=True)
+
+                        st.markdown("### 🤝 投捕搭檔拆分 (Catcher Splits - BR Style)")
+                        if not df_b_full.empty and '守位' in df_b_full.columns:
+                            df_c_footprint = df_b_full[df_b_full['守位'].astype(str).str.strip().str.upper() == 'C'][['賽事階段', '球隊', '球員姓名']].drop_duplicates(subset=['賽事階段', '球隊'])
+                            df_c_footprint.rename(columns={'球員姓名': 'Catcher'}, inplace=True)
+                            
+                            p_sub_with_c = pd.merge(p_sub, df_c_footprint, on=['賽事階段', '球隊'], how='left')
+                            p_sub_with_c['Catcher'] = p_sub_with_c['Catcher'].fillna('未知捕手')
+                            
+                            battery_agg = p_sub_with_c.groupby('Catcher').agg({
+                                '局數(整數)': 'sum', '局數(出局數)': 'sum', '自責分': 'sum', '奪三振': 'sum', '四壞球': 'sum',
+                                '被安打': 'sum', '被全壘打': 'sum', '打者數': 'sum', '失分': 'sum',
+                                '被二壘安打': 'sum' if '被二壘安打' in p_sub_with_c.columns else 'count',
+                                '被三壘安打': 'sum' if '被三壘安打' in p_sub_with_c.columns else 'count',
+                                '賽事階段': 'nunique'
+                            }).reset_index()
+                            
+                            if '被二壘安打' not in p_sub_with_c.columns or battery_agg['被二壘安打'].dtype == object: battery_agg['被二壘打'] = 0
+                            else: battery_agg.rename(columns={'被二壘安打': '被二壘打'}, inplace=True)
+                            if '被三壘安打' not in p_sub_with_c.columns or battery_agg['被三壘安打' if '被三壘安打' in battery_agg else '被三壘安打'].dtype == object: battery_agg['被三壘打'] = 0
+                            else: battery_agg.rename(columns={'被三壘安打': '被三壘打'}, inplace=True)
+                                
+                            battery_list = []
+                            for _, r in battery_agg.iterrows():
+                                c_name = r['Catcher']
+                                g_cnt = r['賽事階段']
+                                c_outs = int(r['局數(整數)']*3 + r['局數(出局數)'])
+                                c_ip_calc = c_outs / 3.0
+                                c_ip_disp = (c_outs // 3) + (c_outs % 3) / 10.0
+                                
+                                c_er = r['自責分']
+                                c_era = (c_er * 9) / c_ip_calc if c_ip_calc > 0 else 0.0
+                                c_so = r['奪三振']
+                                c_bb = r['四壞球']
+                                c_so_bb = c_so / c_bb if c_bb > 0 else float('inf')
+                                
+                                c_h = r['被安打']
+                                c_hr = r['被全壘打']
+                                c_r = r['失分']
+                                c_bf = int(c_outs + c_h + c_bb)
+                                
+                                c_ab = c_bf - c_bb
+                                c_ba = c_h / max(1, c_ab)
+                                c_obp = (c_h + c_bb) / max(1, c_bf)
+                                
+                                c_2b = r['被二壘打']
+                                c_3b = r['被三壘打']
+                                c_1b = c_h - c_2b - c_3b - c_hr
+                                c_tb = c_1b + 2*c_2b + 3*c_3b + 4*c_hr
+                                c_slg = c_tb / max(1, c_ab)
+                                c_ops = c_obp + c_slg
+                                
+                                babip_den = c_ab - c_so - c_hr
+                                c_babip = (c_h - c_hr) / max(1, babip_den)
+                                
+                                battery_list.append({
+                                    'Catcher': c_name, 'G': int(g_cnt), 'IP': c_ip_disp, 'ER': int(c_er), 'ERA': c_era,
+                                    'BF': int(c_bf), 'AB': int(c_ab), 'R': int(c_r), 'H': int(c_h), '2B': int(c_2b),
+                                    '3B': int(c_3b), 'HR': int(c_hr), 'BB': int(c_bb), 'SO': int(c_so), 'SO/BB': c_so_bb,
+                                    'BA': c_ba, 'OBP': c_obp, 'SLG': c_slg, 'OPS': c_ops, 'BAbip': c_babip
+                                })
+                            
+                            if battery_list:
+                                df_battery = pd.DataFrame(battery_list).sort_values('G', ascending=False)
+                                st.dataframe(df_battery.style.format({
+                                    'IP': '{:.1f}', 'ERA': '{:.2f}', 'SO/BB': lambda x: '∞' if x == float('inf') else f"{x:.2f}",
+                                    'BA': fmt_br_style_rate, 'OBP': fmt_br_style_rate, 'SLG': fmt_br_style_rate, 'OPS': fmt_br_style_rate, 'BAbip': fmt_br_style_rate
+                                }), use_container_width=True, hide_index=True)
+                            else:
+                                st.caption("暫無搭配捕手之數據組合。")
+                        else:
+                            st.caption("打者資料庫中無常規守位對照，無法進行投捕交叉推演。")
 
                         st.markdown("### 📈 Savant PR 雷達 (Percentile Rankings)")
                         savant_seasons = ["生涯總成績"] + [f"Season {s}" for s in sub_played_seasons]
@@ -4527,7 +4728,7 @@ with tab4:
                             for c in ['局數(整數)', '局數(出局數)', '奪三振', '自責分', '四壞球', '被安打', '被全壘打']: 
                                 if c not in p_pool.columns: p_pool[c] = 0
                                 p_pool[c] = pd.to_numeric(p_pool[c], errors='coerce').fillna(0)
-                            p_agg = p_pool.groupby(['球隊', '投手姓名']).sum(numeric_only=True).reset_index()
+                            p_agg = p_pool.groupby('投手姓名').sum(numeric_only=True).reset_index()
                             p_agg['IP'] = (p_agg['局數(整數)']*3 + p_agg['局數(出局數)'])/3.0
                             p_agg = p_agg[p_agg['IP'] >= 0].copy()
                             min_ip_savant = 2.0 if target_savant_season != "生涯總成績" else 5.0
@@ -4567,7 +4768,7 @@ with tab4:
 
                             c_rad, c_desc = st.columns([2, 1])
                             with c_rad:
-                                p_df = p_agg[(p_agg['球隊'] == selected_team) & (p_agg['投手姓名'] == selected_player)]
+                                p_df = p_agg[p_agg['投手姓名'] == selected_player]
                                 if not p_df.empty:
                                     p_data = p_df.iloc[0]
                                     is_q = p_data['Qual']
@@ -4624,10 +4825,10 @@ with tab4:
                             
                             stg_cl = clean_stage_name(r['賽事階段'])
                             h_team = global_home_dict.get(r['賽事階段'], "")
-                            loc = "主場" if h_team == selected_team else "客場"
+                            loc = "主場" if h_team == r['球隊'] else "客場"
                             
                             gl_list.append({
-                                '場次': stg_cl, '主客': loc, '紀錄': rec_str, '局數': ip_disp, '面對打者': int(bf), '投球數': int(np_c),
+                                '球隊': r['球隊'], '場次': stg_cl, '主客': loc, '紀錄': rec_str, '局數': ip_disp, '面對打者': int(bf), '投球數': int(np_c),
                                 '失分': int(run), '責失': int(er), '被安打': int(h), '二安': int(h2), '三安': int(h3), '全壘打': int(hr),
                                 '四壞': int(bb), '三振': int(so), '打擊率': ba, '上壘率': obp, '長打率': slg, '防禦率': era
                             })
@@ -4643,77 +4844,79 @@ with tab4:
                 # 🏛️ 投手：歷史定位與相似度 (HOF & Similarity)
                 # =======================================================
                 with t_hof:
-                    st.markdown("### 🏛️ 名人堂神主牌預測儀 (JAWS & HOF Monitor)")
-                    peak_war = sum(sorted(s_wars, reverse=True)[:7]) if s_wars else 0.0
-                    jaws = (career_war + peak_war) / 2.0
-                    st.columns(3)[0].metric("JAWS 分數", f"{jaws:.1f}", "✨ 殿堂級王牌" if jaws >= 35 else "🏃 穩定累積中")
-                    st.progress(max(0.0, min(1.0, jaws / 35.0)))
-
-                    st.markdown("---")
-                    st.markdown("### 🧬 Bill James 歷史相似度分數 (Similarity Scores)")
-                    st.caption("滿分為 1000，扣分越少代表生涯投球數據軌跡越相似。**（✨ 已導入強化版懲罰權重，嚴格篩選同型態球員）**")
-                    
-                    df_p_all = df_p_full[df_p_full['賽事階段'].astype(str).str.contains(filter_str, regex=False)].copy()
-                    for c in ['局數(整數)','局數(出局數)','被安打','四壞球','奪三振','自責分']:
-                        if c not in df_p_all.columns: df_p_all[c] = 0
-                        df_p_all[c] = pd.to_numeric(df_p_all[c], errors='coerce').fillna(0)
-                        
-                    df_p_all['W'] = df_p_all['勝敗'].astype(str).apply(lambda x: 1 if '勝' in x else 0)
-                    df_p_all['L'] = df_p_all['勝敗'].astype(str).apply(lambda x: 1 if '敗' in x else 0)
-                    df_p_all['SV'] = df_p_all['勝敗'].astype(str).apply(lambda x: 1 if '救援' in x else 0)
-                    df_p_all['GS'] = df_p_all.groupby(['賽事階段', '球隊']).cumcount() == 0
-                    df_p_all['GS'] = df_p_all['GS'].astype(int)
-                    
-                    sim_agg_p = df_p_all.groupby(['球隊', '投手姓名']).agg({
-                        '賽事階段':'nunique', '局數(整數)':'sum', '局數(出局數)':'sum', '被安打':'sum', 
-                        '四壞球':'sum', '奪三振':'sum', '自責分':'sum', 'W':'sum', 'L':'sum', 'SV':'sum', 'GS':'sum'
-                    }).reset_index()
-                    
-                    tgt = sim_agg_p[(sim_agg_p['球隊'] == selected_team) & (sim_agg_p['投手姓名'] == selected_player)]
-                    if tgt.empty:
-                        st.info("尚無數據進行相似度比對。")
+                    if filter_str == "世界大賽":
+                        st.warning("⚠️ **【BR 數據庫規則】** 依據 Baseball-Reference 標準，名人堂 (JAWS) 與歷史相似度 (Similarity Scores) **完全不計入季後賽數據**。請將上方賽事類型切換為「例行賽」以解鎖此區塊分析！")
                     else:
-                        tgt = tgt.iloc[0]
-                        t_ip = (tgt['局數(整數)']*3 + tgt['局數(出局數)'])/3.0
-                        t_era = (tgt['自責分'] * 9) / t_ip if t_ip > 0 else 0
-                        t_wpct = tgt['W'] / (tgt['W'] + tgt['L']) if (tgt['W'] + tgt['L']) > 0 else 0
-                        t_is_sp = (tgt['GS'] / max(1, tgt['賽事階段'])) > 0.5
+                        st.markdown("### 🏛️ 名人堂神主牌預測儀 (JAWS & HOF Monitor)")
+                        peak_war = sum(sorted(s_wars, reverse=True)[:7]) if s_wars else 0.0
+                        jaws = (career_war + peak_war) / 2.0
+                        st.columns(3)[0].metric("JAWS 分數", f"{jaws:.1f}", "✨ 殿堂級王牌" if jaws >= 35 else "🏃 穩定累積中")
+                        st.progress(max(0.0, min(1.0, jaws / 35.0)))
+    
+                        st.markdown("---")
+                        st.markdown("### 🧬 Bill James 歷史相似度分數 (Similarity Scores)")
+                        st.caption("滿分為 1000，扣分越少代表生涯投球數據軌跡越相似。**（✨ 已導入強化版懲罰權重，嚴格篩選同型態球員）**")
                         
-                        sim_scores = []
-                        for _, r in sim_agg_p.iterrows():
-                            if r['投手姓名'] == selected_player and r['球隊'] == selected_team: continue
-                            r_ip = (r['局數(整數)']*3 + r['局數(出局數)'])/3.0
-                            r_era = (r['自責分'] * 9) / r_ip if r_ip > 0 else 0
-                            r_wpct = r['W'] / (r['W'] + r['L']) if (r['W'] + r['L']) > 0 else 0
+                        df_p_all = df_p_full[df_p_full['賽事階段'].astype(str).str.contains(filter_str, regex=False)].copy()
+                        for c in ['局數(整數)','局數(出局數)','被安打','四壞球','奪三振','自責分']:
+                            if c not in df_p_all.columns: df_p_all[c] = 0
+                            df_p_all[c] = pd.to_numeric(df_p_all[c], errors='coerce').fillna(0)
                             
-                            r_is_sp = (r['GS'] / max(1, r['賽事階段'])) > 0.5
-                            role_penalty = 100 if t_is_sp != r_is_sp else 0
-                            
-                            # ✨ 強化版投手相似度懲罰 (大幅提升防禦率、局數、三振、角色的扣分比重，確保型態一致)
-                            diff = (
-                                abs(r['W'] - tgt['W'])*3 + 
-                                abs(r['L'] - tgt['L']) + 
-                                (abs(r_wpct - t_wpct)*1000 if max(r['W'], tgt['W']) >= 10 else 0) + 
-                                abs(r_era - t_era)*100 + 
-                                abs(r['賽事階段'] - tgt['賽事階段'])*2 + 
-                                abs(r_ip - t_ip)/5 + 
-                                abs(r['被安打'] - tgt['被安打'])/15 + 
-                                abs(r['奪三振'] - tgt['奪三振'])/10 + 
-                                abs(r['四壞球'] - tgt['四壞球'])/5 + 
-                                abs(r['SV'] - tgt['SV'])*3 + 
-                                role_penalty
-                            )
-                            
-                            score = 1000 - diff
-                            t_role_str = "SP" if r_is_sp else "RP"
-                            sim_scores.append({'球員': f"[{r['球隊']}] {r['投手姓名']}", '角色': t_role_str, '相似度': score, 'W': r['W'], 'ERA': r_era, 'SO': r['奪三振']})
-                            
-                        sim_df = pd.DataFrame(sim_scores)
-                        if not sim_df.empty:
-                            sim_df = sim_df.sort_values('相似度', ascending=False).head(5)
-                            st.dataframe(sim_df.style.format({'相似度': '{:.1f}', 'ERA': '{:.2f}'}), use_container_width=True, hide_index=True)
+                        df_p_all['W'] = df_p_all['勝敗'].astype(str).apply(lambda x: 1 if '勝' in x else 0)
+                        df_p_all['L'] = df_p_all['勝敗'].astype(str).apply(lambda x: 1 if '敗' in x else 0)
+                        df_p_all['SV'] = df_p_all['勝敗'].astype(str).apply(lambda x: 1 if '救援' in x else 0)
+                        df_p_all['GS'] = df_p_all.groupby(['賽事階段', '球隊']).cumcount() == 0
+                        df_p_all['GS'] = df_p_all['GS'].astype(int)
+                        
+                        sim_agg_p = df_p_all.groupby('投手姓名').agg({
+                            '賽事階段':'nunique', '局數(整數)':'sum', '局數(出局數)':'sum', '被安打':'sum', 
+                            '四壞球':'sum', '奪三振':'sum', '自責分':'sum', 'W':'sum', 'L':'sum', 'SV':'sum', 'GS':'sum'
+                        }).reset_index()
+                        
+                        tgt = sim_agg_p[sim_agg_p['投手姓名'] == selected_player]
+                        if tgt.empty:
+                            st.info("尚無數據進行相似度比對。")
                         else:
-                            st.info("資料庫中尚無其他球員可供比對。")
+                            tgt = tgt.iloc[0]
+                            t_ip = (tgt['局數(整數)']*3 + tgt['局數(出局數)'])/3.0
+                            t_era = (tgt['自責分'] * 9) / t_ip if t_ip > 0 else 0
+                            t_wpct = tgt['W'] / (tgt['W'] + tgt['L']) if (tgt['W'] + tgt['L']) > 0 else 0
+                            t_is_sp = (tgt['GS'] / max(1, tgt['賽事階段'])) > 0.5
+                            
+                            sim_scores = []
+                            for _, r in sim_agg_p.iterrows():
+                                if r['投手姓名'] == selected_player: continue
+                                r_ip = (r['局數(整數)']*3 + r['局數(出局數)'])/3.0
+                                r_era = (r['自責分'] * 9) / r_ip if r_ip > 0 else 0
+                                r_wpct = r['W'] / (r['W'] + r['L']) if (r['W'] + r['L']) > 0 else 0
+                                
+                                r_is_sp = (r['GS'] / max(1, r['賽事階段'])) > 0.5
+                                role_penalty = 100 if t_is_sp != r_is_sp else 0
+                                
+                                diff = (
+                                    abs(r['W'] - tgt['W'])*3 + 
+                                    abs(r['L'] - tgt['L']) + 
+                                    (abs(r_wpct - t_wpct)*1000 if max(r['W'], tgt['W']) >= 10 else 0) + 
+                                    abs(r_era - t_era)*100 + 
+                                    abs(r['賽事階段'] - tgt['賽事階段'])*2 + 
+                                    abs(r_ip - t_ip)/5 + 
+                                    abs(r['被安打'] - tgt['被安打'])/15 + 
+                                    abs(r['奪三振'] - tgt['奪三振'])/10 + 
+                                    abs(r['四壞球'] - tgt['四壞球'])/5 + 
+                                    abs(r['SV'] - tgt['SV'])*3 + 
+                                    role_penalty
+                                )
+                                
+                                score = 1000 - diff
+                                t_role_str = "SP" if r_is_sp else "RP"
+                                sim_scores.append({'球員': f"{r['投手姓名']}", '角色': t_role_str, '相似度': score, 'W': r['W'], 'ERA': r_era, 'SO': r['奪三振']})
+                                
+                            sim_df = pd.DataFrame(sim_scores)
+                            if not sim_df.empty:
+                                sim_df = sim_df.sort_values('相似度', ascending=False).head(5)
+                                st.dataframe(sim_df.style.format({'相似度': '{:.1f}', 'ERA': '{:.2f}'}), use_container_width=True, hide_index=True)
+                            else:
+                                st.info("資料庫中尚無其他球員可供比對。")
 # ==========================================
 # --- 分頁 5：🏛️ 聯盟大獎與極端紀錄室 ---
 # ==========================================
@@ -4729,34 +4932,114 @@ with tab5:
     df_b_full = st.session_state.get('df_b_raw', pd.DataFrame())
     df_p_full = st.session_state.get('df_p_raw', pd.DataFrame())
     
-    # 讀取全域算好的主客場矩陣
-    global_home_dict = st.session_state.get('global_home_dict', {})
+    # 🛡️ 建立全數值化的純淨底層 (解決 Groupby 字串被丟棄導致算錯的致命問題)
+    df_b_clean = df_b_full.copy()
+    for col in ['打席','打數','得分','安打','二壘安打','三壘安打','全壘打','打點','四壞球','三振','盜壘']: 
+        if col in df_b_clean.columns: df_b_clean[col] = pd.to_numeric(df_b_clean[col], errors='coerce').fillna(0)
+        
+    df_p_clean = df_p_full.copy()
+    if not df_p_clean.empty:
+        df_p_clean['勝'] = df_p_clean['勝敗'].astype(str).apply(lambda x: 1 if '勝' in x else 0)
+        df_p_clean['敗'] = df_p_clean['勝敗'].astype(str).apply(lambda x: 1 if '敗' in x else 0)
+        df_p_clean['救援'] = df_p_clean['勝敗'].astype(str).apply(lambda x: 1 if '救援' in x else 0)
+        df_p_clean['中繼'] = df_p_clean['勝敗'].astype(str).apply(lambda x: 1 if '中繼' in x else 0)
+        for col in ['局數(整數)', '局數(出局數)', '奪三振', '失分', '自責分', '四壞球', '被全壘打', '投球數', '被安打']: 
+            if col in df_p_clean.columns: df_p_clean[col] = pd.to_numeric(df_p_clean[col], errors='coerce').fillna(0)
+    
+    if '賽事階段' not in df_b_clean.columns: df_b_clean['賽事階段'] = ""
+    if '賽事階段' not in df_p_clean.columns: df_p_clean['賽事階段'] = ""
+    
+    def safe_val(val):
+        try: return float(val) if pd.notna(val) else 0.0
+        except: return 0.0
     
     max_season = 1
-    if not df_p_full.empty:
-        s_nums_ext = df_p_full['賽事階段'].astype(str).str.extract(r'\[S(\d+)\]')[0].dropna().astype(int)
+    if not df_p_clean.empty:
+        s_nums_ext = df_p_clean['賽事階段'].astype(str).str.extract(r'\[S(\d+)\]')[0].dropna().astype(int)
         if not s_nums_ext.empty: max_season = int(s_nums_ext.max())
+
+    # ✨ 終極無敵：分頁五專屬主客場推演引擎 (完美處理和局與得失分差)
+    def build_tab5_home_dict(df_p, df_b, max_s):
+        h_dict = {}
+        prev_ws_loser = "LAD"
+        for s in range(1, max_s + 2):
+            # 1. 決定例行賽主場優勢 (前一年 WS 輸家)
+            rs_hfa = "LAA" if s == 1 else prev_ws_loser
+            if s > 1:
+                p_ws = df_p[df_p['賽事階段'].astype(str).str.contains(f"\\[S{s-1}\\] 世界大賽", regex=False)]
+                if not p_ws.empty:
+                    laa_ws = p_ws[p_ws['球隊']=='LAA']['勝'].sum()
+                    lad_ws = p_ws[p_ws['球隊']=='LAD']['勝'].sum()
+                    if laa_ws > lad_ws: rs_hfa = "LAD"
+                    elif lad_ws > laa_ws: rs_hfa = "LAA"
+                    else:
+                        # WS 和局或沒打完，回推看前一年例行賽戰績
+                        p_rs = df_p[df_p['賽事階段'].astype(str).str.contains(f"\\[S{s-1}\\] 例行賽", regex=False)]
+                        laa_rs = p_rs[p_rs['球隊']=='LAA']['勝'].sum()
+                        lad_rs = p_rs[p_rs['球隊']=='LAD']['勝'].sum()
+                        if laa_rs > lad_rs: rs_hfa = "LAD"
+                        elif lad_rs > laa_rs: rs_hfa = "LAA"
+                        else:
+                            # 例行賽也平手 (包含和局)，比得失分差
+                            b_rs = df_b[df_b['賽事階段'].astype(str).str.contains(f"\\[S{s-1}\\] 例行賽", regex=False)]
+                            laa_rd = b_rs[b_rs['球隊']=='LAA']['得分'].sum() - p_rs[p_rs['球隊']=='LAA']['失分'].sum()
+                            lad_rd = b_rs[b_rs['球隊']=='LAD']['得分'].sum() - p_rs[p_rs['球隊']=='LAD']['失分'].sum()
+                            rs_hfa = "LAD" if laa_rd > lad_rd else "LAA"
+
+            for g in range(1, 13):
+                h_tm = rs_hfa if g % 2 == 1 else ("LAD" if rs_hfa == "LAA" else "LAA")
+                h_dict[f"[S{s}] 例行賽 G{g}"] = h_tm
+                h_dict[f"[S{s}] 例行賽 第{g}場"] = h_tm
+
+            # 2. 決定世界大賽主場優勢 (今年例行賽戰績，平手比得失分差)
+            ws_hfa = "LAA"
+            c_rs_p = df_p[df_p['賽事階段'].astype(str).str.contains(f"\\[S{s}\\] 例行賽", regex=False)]
+            if not c_rs_p.empty:
+                laa_rs = c_rs_p[c_rs_p['球隊']=='LAA']['勝'].sum()
+                lad_rs = c_rs_p[c_rs_p['球隊']=='LAD']['勝'].sum()
+                if laa_rs > lad_rs: ws_hfa = "LAA"
+                elif lad_rs > laa_rs: ws_hfa = "LAD"
+                else:
+                    c_rs_b = df_b[df_b['賽事階段'].astype(str).str.contains(f"\\[S{s}\\] 例行賽", regex=False)]
+                    laa_rd = c_rs_b[c_rs_b['球隊']=='LAA']['得分'].sum() - c_rs_p[c_rs_p['球隊']=='LAA']['失分'].sum()
+                    lad_rd = c_rs_b[c_rs_b['球隊']=='LAD']['得分'].sum() - c_rs_p[c_rs_p['球隊']=='LAD']['失分'].sum()
+                    ws_hfa = "LAD" if lad_rd > laa_rd else "LAA"
+                    
+            for g in range(1, 8):
+                h_tm = ws_hfa if g in [1, 2, 6, 7] else ("LAD" if ws_hfa == "LAA" else "LAA")
+                h_dict[f"[S{s}] 世界大賽 G{g}"] = h_tm
+                h_dict[f"[S{s}] 世界大賽 第{g}場"] = h_tm
+                
+            # 3. 更新下一年起始用的 WS 輸家
+            s_ws_p = df_p[df_p['賽事階段'].astype(str).str.contains(f"\\[S{s}\\] 世界大賽", regex=False)]
+            if not s_ws_p.empty:
+                laa_ws = s_ws_p[s_ws_p['球隊']=='LAA']['勝'].sum()
+                lad_ws = s_ws_p[s_ws_p['球隊']=='LAD']['勝'].sum()
+                if laa_ws > lad_ws: prev_ws_loser = "LAD"
+                elif lad_ws > laa_ws: prev_ws_loser = "LAA"
+
+        manual_home_correction = {
+            "[S6] 世界大賽 G1": "LAD", "[S6] 世界大賽 G2": "LAD", "[S6] 世界大賽 G3": "LAA",
+            "[S6] 世界大賽 G4": "LAA", "[S6] 世界大賽 G5": "LAA", "[S6] 世界大賽 G6": "LAD", "[S6] 世界大賽 G7": "LAD",
+        }
+        h_dict.update(manual_home_correction)
+        return h_dict
+
+    tab5_home_dict = build_tab5_home_dict(df_p_clean, df_b_clean, max_season)
+    
+    def get_home_team_tab5(stage_str):
+        clean = str(stage_str).strip()
+        if clean in tab5_home_dict: return tab5_home_dict[clean]
+        for k, v in tab5_home_dict.items():
+            if k.replace(' ', '') == clean.replace(' ', ''): return v
+        return "LAA" 
+
     curr_s_prefix = f"[S{max_season}]"
 
-    # ✨ 將極端榜的大水池聚合邏輯拉到最上方，讓「隊史神主牌」也能無縫讀取
-    b_agg_saber = df_b_full.copy()
-    for col in ['打席','打數','得分','安打','二壘安打','三壘安打','全壘打','打點','四壞球','三振','盜壘']: 
-        if col not in b_agg_saber.columns: b_agg_saber[col] = 0
-        b_agg_saber[col] = pd.to_numeric(b_agg_saber[col], errors='coerce').fillna(0)
-    b_saber = b_agg_saber.groupby(['球隊', '球員姓名']).sum(numeric_only=True).reset_index() if not b_agg_saber.empty else pd.DataFrame()
-    
-    p_agg_saber = df_p_full.copy()
-    if not p_agg_saber.empty:
-        p_agg_saber['勝'] = p_agg_saber['勝敗'].astype(str).apply(lambda x: 1 if '勝' in x else 0)
-        p_agg_saber['救援'] = p_agg_saber['勝敗'].astype(str).apply(lambda x: 1 if '救援' in x else 0)
-        p_agg_saber['中繼'] = p_agg_saber['勝敗'].astype(str).apply(lambda x: 1 if '中繼' in x else 0)
-        for col in ['局數(整數)', '局數(出局數)', '奪三振', '失分', '自責分', '四壞球', '被全壘打']: 
-            if col not in p_agg_saber.columns: p_agg_saber[col] = 0
-            p_agg_saber[col] = pd.to_numeric(p_agg_saber[col], errors='coerce').fillna(0)
-        p_saber = p_agg_saber.groupby(['球隊', '投手姓名']).sum(numeric_only=True).reset_index()
+    b_saber = df_b_clean.groupby(['球隊', '球員姓名']).sum(numeric_only=True).reset_index() if not df_b_clean.empty else pd.DataFrame()
+    p_saber = df_p_clean.groupby(['球隊', '投手姓名']).sum(numeric_only=True).reset_index() if not df_p_clean.empty else pd.DataFrame()
+    if not p_saber.empty:
         p_saber['局數'] = (p_saber['局數(整數)']*3 + p_saber['局數(出局數)'])/3.0
-    else:
-        p_saber = pd.DataFrame()
     
     t_awards, t_all_mlb, t_game_mvps, t_leaders, t_milestones, t_streaks, t_extremes = st.tabs([
         "🏆 賽季大獎", "🌟 最佳陣容", "🏅 歷場 MVP", "👑 歷史神主牌", "⏳ 里程碑追蹤", "💎 神聖與連勝", "🤯 單場極端榜"
@@ -4775,16 +5058,13 @@ with tab5:
         st.caption("※ 註：MVP與賽揚獎的 WAR 值皆為「例行賽限定」之計算基準。(例行賽未滿 10 場將只顯示領跑者)")
         
         for s_idx in range(1, max_season + 1):
-            if s_idx not in season_cache: 
-                continue
+            if s_idx not in season_cache: continue
                 
             is_expanded = (s_idx == max_season)
-            
             with st.expander(f"📖 Season {s_idx} 大獎得主與票選結果", expanded=is_expanded):
                 mvp, mvp_df, cy, cy_df, ss, ss_df, roty, roty_df, fmvp, fmvp_df, rs_cand, all_mlb_winners, is_rs_fin, is_ws_fin = season_cache[s_idx]
                 
-                if not is_rs_fin:
-                    st.warning(f"⚠️ Season {s_idx} 例行賽尚未打滿 10 場，下方為「模擬領跑者」，大獎尚未正式定案。")
+                if not is_rs_fin: st.warning(f"⚠️ Season {s_idx} 例行賽尚未打滿 10 場，下方為「模擬領跑者」，大獎尚未正式定案。")
                 
                 c_mvp = track_award(award_counts['MVP'], mvp_df) if is_rs_fin else 0
                 c_cy = track_award(award_counts['CyYoung'], cy_df) if is_rs_fin else 0
@@ -4794,16 +5074,11 @@ with tab5:
                 
                 mvp_str = f"{mvp} {'★第'+str(c_mvp)+'次' if c_mvp > 1 else ''}" if "無" not in mvp else mvp
                 if not is_rs_fin and mvp_str != "無": mvp_str += " (領跑中)"
-                
                 cy_str = f"{cy} {'★第'+str(c_cy)+'次' if c_cy > 1 else ''}" if "無" not in cy else cy
                 if not is_rs_fin and cy_str != "無": cy_str += " (領跑中)"
-                
                 ss_str = f"{ss} {'★第'+str(c_ss)+'次' if c_ss > 1 else ''}" if "無" not in ss else ss
                 if not is_rs_fin and ss_str != "無": ss_str += " (領跑中)"
-                
                 fmvp_str = f"{fmvp} {'★第'+str(c_fmvp)+'次' if c_fmvp > 1 else ''}" if "無" not in fmvp else fmvp
-                if not is_ws_fin and fmvp_str != "無" and "尚未產生" not in fmvp_str: fmvp_str += " (WS 領跑中)"
-                
                 roty_str = f"{roty}" 
                 if not is_rs_fin and roty_str != "無": roty_str += " (領跑中)"
                 
@@ -4813,52 +5088,45 @@ with tab5:
                 with c1:
                     st.markdown(f"**🏅 年度 MVP**：\n{mvp_str}")
                     if not mvp_df.empty:
-                        with st.expander("📊 查看 MVP BBWAA 記者投票明細"): 
-                            st.dataframe(mvp_df.head(5).style.format(fmt), use_container_width=True)
+                        with st.expander("📊 查看 MVP BBWAA 記者投票明細"): st.dataframe(mvp_df.head(5).style.format(fmt), use_container_width=True)
                     st.markdown("---")
                     st.markdown(f"**⚾ 賽揚獎 (Cy Young)**：\n{cy_str}")
                     if not cy_df.empty:
-                        with st.expander("📊 查看賽揚獎 BBWAA 記者投票明細"): 
-                            st.dataframe(cy_df.head(5).style.format(fmt), use_container_width=True)
+                        with st.expander("📊 查看賽揚獎 BBWAA 記者投票明細"): st.dataframe(cy_df.head(5).style.format(fmt), use_container_width=True)
                     st.markdown("---")
                     st.markdown(f"**🌟 世界大賽 FMVP**：\n{fmvp_str}")
                     if not fmvp_df.empty:
-                        with st.expander("📊 查看 FMVP 評委投票明細"): 
-                            st.dataframe(fmvp_df.head(5).style.format(fmt), use_container_width=True)
+                        with st.expander("📊 查看 FMVP 評委投票明細", expanded=not is_ws_fin): st.dataframe(fmvp_df.head(5).style.format(fmt), use_container_width=True)
                 with c2:
                     st.markdown(f"**👶 新人王 (ROTY)**：\n{roty_str}")
                     if not roty_df.empty:
-                        with st.expander("📊 查看新人王 BBWAA 記者投票明細"): 
-                            st.dataframe(roty_df.head(5).style.format(fmt), use_container_width=True)
+                        with st.expander("📊 查看新人王 BBWAA 記者投票明細"): st.dataframe(roty_df.head(5).style.format(fmt), use_container_width=True)
                     st.markdown("---")
                     st.markdown(f"**🏏 銀棒獎 (Silver Slugger)**：\n{ss_str}")
                     if not ss_df.empty:
-                        with st.expander("📊 查看銀棒獎 BBWAA 記者投票明細"): 
-                            st.dataframe(ss_df.head(5).style.format(fmt), use_container_width=True)
+                        with st.expander("📊 查看銀棒獎 BBWAA 記者投票明細"): st.dataframe(ss_df.head(5).style.format(fmt), use_container_width=True)
 
                 st.markdown("---")
                 st.markdown("### 🎖️ 聯盟特別肯定獎項 (Special Awards)")
                 
-                # ✨ 悲情賽揚判定邏輯完美修正
                 tough_cy_str = "無"
                 if rs_cand:
                     pitchers_pool = {k: v for k, v in rs_cand.items() if v.get('類型') in ['投手', '二刀流'] and v.get('Qual', False)}
                     if pitchers_pool:
-                        unlucky_list = [k for k, v in pitchers_pool.items() if v.get('W', 0) == 0 and v.get('eWAR', 0) >= 0.5]
-                        if unlucky_list:
-                            tough_winner = max(unlucky_list, key=lambda k: pitchers_pool[k]['eWAR'])
+                        zero_wins = [k for k, v in pitchers_pool.items() if v.get('W', 0) == 0 and v.get('eWAR', 0) >= 0.5]
+                        if zero_wins:
+                            tough_winner = max(zero_wins, key=lambda k: pitchers_pool[k]['eWAR'])
                             tough_cy_str = f"😢 {tough_winner} (eWAR {pitchers_pool[tough_winner]['eWAR']:.1f} | 0勝 | ERA {pitchers_pool[tough_winner].get('ERA', 0):.2f})"
                         else:
                             top_pitchers = sorted(pitchers_pool.items(), key=lambda x: x[1]['eWAR'], reverse=True)[:3]
-                            if top_pitchers:
-                                low_wins = [x for x in top_pitchers if x[1].get('W', 0) <= 1]
-                                if low_wins:
-                                    tough_winner = min(low_wins, key=lambda x: x[1].get('W', 0))
-                                    tough_cy_str = f"😢 {tough_winner[0]} (eWAR {tough_winner[1]['eWAR']:.1f} | {int(tough_winner[1].get('W',0))}勝 | ERA {tough_winner[1].get('ERA', 0):.2f})"
+                            low_wins = [x for x in top_pitchers if x[1].get('W', 0) <= 1]
+                            if low_wins:
+                                tough_winner = min(low_wins, key=lambda x: x[1].get('W', 0))
+                                tough_cy_str = f"😢 {tough_winner[0]} (eWAR {tough_winner[1]['eWAR']:.1f} | {int(tough_winner[1].get('W',0))}勝 | ERA {tough_winner[1].get('ERA', 0):.2f})"
                 
                 bullpen_king_str = "無"
                 s_pref = f"[S{s_idx}]"
-                df_p_rs_streak = df_p_full[(df_p_full['賽事階段'].astype(str).str.contains(s_pref, regex=False)) & (df_p_full['賽事階段'].astype(str).str.contains("例行賽", regex=False))].copy()
+                df_p_rs_streak = df_p_clean[(df_p_clean['賽事階段'].astype(str).str.contains(s_pref, regex=False)) & (df_p_clean['賽事階段'].astype(str).str.contains("例行賽", regex=False))].copy()
                 if not df_p_rs_streak.empty:
                     df_p_rs_streak = df_p_rs_streak.sort_values('時間戳記')
                     df_p_rs_streak['g_idx'] = df_p_rs_streak.groupby(['賽事階段', '球隊']).cumcount()
@@ -4867,8 +5135,7 @@ with tab5:
                         rp_rank = df_rp_only.groupby(['球隊', '投手姓名']).size().reset_index(name='apps')
                         max_rp = rp_rank.sort_values('apps', ascending=False).iloc[0]
                         bullpen_king_str = f"🔒 [{max_rp['球隊']}] {max_rp['投手姓名']} (瘋狂出賽 {int(max_rp['apps'])} 場後援)"
-                    else:
-                        bullpen_king_str = "無 (全季皆由先發投手完投)"
+                    else: bullpen_king_str = "無 (全季皆由先發投手完投)"
 
                 comeback_str = "無 (首賽季不頒發)"
                 if s_idx > 1 and (s_idx - 1) in season_cache:
@@ -4878,24 +5145,19 @@ with tab5:
                         for name, curr_stats in rs_cand.items():
                             curr_war = curr_stats.get('eWAR', 0.0)
                             p_name_only = name.split('] ')[1] if '] ' in name else name
-                            
-                            found_past = False
-                            past_war = 0.0
+                            found_past, past_war = False, 0.0
                             for old_name, old_stats in past_cand.items():
                                 old_name_only = old_name.split('] ')[1] if '] ' in old_name else old_name
                                 if p_name_only == old_name_only:
                                     past_war = old_stats.get('eWAR', 0.0)
                                     found_past = True
                                     break
-                            
                             if found_past and past_war <= 0.5 and curr_war > 0.5:
                                 cb_scores[name] = curr_war - past_war
-                        
                         if cb_scores:
                             cb_winner = max(cb_scores.items(), key=lambda x: x[1])
                             comeback_str = f"🔥 {cb_winner[0]} (eWAR 從去年的 {rs_cand[cb_winner[0]]['eWAR'] - cb_winner[1]:.1f} 暴升至 {rs_cand[cb_winner[0]]['eWAR']:.1f}!)"
-                        else:
-                            comeback_str = "無符合回春資格之球員"
+                        else: comeback_str = "無符合回春資格之球員"
 
                 cx1, cx2, cx3 = st.columns(3)
                 cx1.info(f"**🔥 年度東山再起獎**：\n{comeback_str}")
@@ -4906,195 +5168,120 @@ with tab5:
         st.subheader("🌟 歷屆年度最佳陣容第一隊 (All-MLB First Team)")
         all_mlb_counts = {}
         for s_idx in range(1, max_season + 1):
-            if s_idx not in season_cache: 
-                continue
-                
+            if s_idx not in season_cache: continue
             with st.expander(f"📖 Season {s_idx} 最佳陣容", expanded=(s_idx == max_season)):
                 rs_cand = season_cache[s_idx][10]
                 is_rs_fin = season_cache[s_idx][12]
+                t_games = df_p_clean[df_p_clean['賽事階段'].astype(str).str.contains(f"\\[S{s_idx}\\] 例行賽")].get('賽事階段', pd.Series()).nunique() or 10
+                r_pa, r_ip = max(15.0, t_games * 1.5) if s_idx >= 6 else 15.0, max(5.0, t_games * 0.4) if s_idx >= 6 else 5.0
+                st.markdown(f"<blockquote><b> All-MLB 評選標準宣告</b>：<br>野手達標門檻：<b>{r_pa:.1f} 打席</b> ｜ 投手達標門檻：<b>{r_ip:.1f} 局</b>。依據該季例行賽標準進階魔球公式之累積 eWAR 分數，跨隊進行頂峰對決，各守位僅取最強第一人入選。</blockquote>", unsafe_allow_html=True)
                 
-                first_team = {}
+                first_team = {p: "無 (達標數據不足)" for p in ['C','1B','2B','3B','SS','OF','DH','SP','RP']}
                 if rs_cand:
                     batters = {k: v for k, v in rs_cand.items() if v['類型'] in ['打者', '二刀流']}
                     pitchers = {k: v for k, v in rs_cand.items() if v['類型'] in ['投手', '二刀流']}
-                    selected_players = set()
+                    sel_p = set()
                     
-                    def get_best_hitter(pos_list, is_dh=False):
-                        if is_dh:
-                            cands = {k: v for k, v in batters.items() if k not in selected_players and v.get('Qual', False)}
-                            empty_reason = "無 (無剩餘達標打者)"
-                        else:
-                            cands = {k: v for k, v in batters.items() if v.get('Pos', 'DH') in pos_list and k not in selected_players and v.get('Qual', False)}
-                            empty_reason = "無 (無人達打席門檻)"
-                            
-                        if not cands: 
-                            return empty_reason
+                    def pick_best(pos_list, is_dh=False):
+                        cands = {k: v for k, v in batters.items() if (is_dh or v.get('Pos') in pos_list) and k not in sel_p and v.get('Qual', False)}
                         pos_cands = {k: v for k, v in cands.items() if v['eWAR'] > 0}
-                        if not pos_cands: 
-                            return "無 (貢獻值皆為負)"
+                        if pos_cands:
+                            best = max(pos_cands.items(), key=lambda x: x[1]['eWAR'])[0]
+                            sel_p.add(best)
+                            if is_rs_fin:
+                                all_mlb_counts[best] = all_mlb_counts.get(best, 0) + 1
+                                cnt = all_mlb_counts[best]
+                                return f"{best} (eWAR {pos_cands[best]['eWAR']:.1f}){f' ★第{cnt}次' if cnt > 1 else ''}"
+                            return f"{best} (eWAR {pos_cands[best]['eWAR']:.1f}) (領跑中)"
+                        return "無符合常規資格者"
                         
-                        best = max(pos_cands.items(), key=lambda x: x[1]['eWAR'])
-                        best_name = best[0]
-                        selected_players.add(best_name)
-                        
-                        if is_rs_fin:
-                            all_mlb_counts[best_name] = all_mlb_counts.get(best_name, 0) + 1
-                            cnt = all_mlb_counts[best_name]
-                            return f"{best_name} (eWAR {best[1]['eWAR']:.1f}){f' ★第{cnt}次' if cnt > 1 else ''}"
-                        else:
-                            return f"{best_name} (eWAR {best[1]['eWAR']:.1f}) (領跑中)"
-                        
-                    first_team['C'] = get_best_hitter(['C'])
-                    first_team['1B'] = get_best_hitter(['1B'])
-                    first_team['2B'] = get_best_hitter(['2B'])
-                    first_team['3B'] = get_best_hitter(['3B'])
-                    first_team['SS'] = get_best_hitter(['SS'])
+                    first_team['C'] = pick_best(['C'])
+                    first_team['1B'] = pick_best(['1B'])
+                    first_team['2B'] = pick_best(['2B'])
+                    first_team['3B'] = pick_best(['3B'])
+                    first_team['SS'] = pick_best(['SS'])
                     
-                    of_base = {k: v for k, v in batters.items() if v.get('Pos', 'DH') in ['LF', 'CF', 'RF', 'OF'] and k not in selected_players and v.get('Qual', False)}
-                    of_cands = {k: v for k, v in of_base.items() if v['eWAR'] > 0}
-                    
-                    if not of_base: 
-                        first_team['OF'] = "無 (無外野手達標)"
-                    elif not of_cands: 
-                        first_team['OF'] = "無 (外野貢獻值皆為負)"
-                    else:
+                    of_cands = {k: v for k, v in batters.items() if v.get('Pos') in ['LF','CF','RF','OF'] and k not in sel_p and v.get('Qual', False) and v['eWAR'] > 0}
+                    if of_cands:
                         top_ofs = sorted(of_cands.items(), key=lambda x: x[1]['eWAR'], reverse=True)[:3]
                         of_strs = []
-                        for x in top_ofs: 
-                            best_name = x[0]
-                            selected_players.add(best_name)
+                        for x in top_ofs:
+                            sel_p.add(x[0])
                             if is_rs_fin:
-                                all_mlb_counts[best_name] = all_mlb_counts.get(best_name, 0) + 1
-                                cnt = all_mlb_counts[best_name]
-                                of_strs.append(f"{best_name} (eWAR {x[1]['eWAR']:.1f}){f' ★第{cnt}次' if cnt > 1 else ''}")
-                            else:
-                                of_strs.append(f"{best_name} (eWAR {x[1]['eWAR']:.1f}) (領跑中)")
+                                all_mlb_counts[x[0]] = all_mlb_counts.get(x[0], 0) + 1
+                                cnt = all_mlb_counts[x[0]]
+                                of_strs.append(f"{x[0]} (eWAR {x[1]['eWAR']:.1f}){f' ★第{cnt}次' if cnt > 1 else ''}")
+                            else: of_strs.append(f"{x[0]} (eWAR {x[1]['eWAR']:.1f}) (領跑中)")
                         first_team['OF'] = "  \n".join(of_strs)
                         
-                    first_team['DH'] = get_best_hitter([], is_dh=True)
+                    first_team['DH'] = pick_best([], is_dh=True)
                     
                     if pitchers:
-                        sp_base = {k: v for k, v in pitchers.items() if v.get('Qual', False)}
-                        sp_cands = {k: v for k, v in sp_base.items() if v['eWAR'] > 0}
-                        if not sp_base: 
-                            first_team['SP'] = "無 (無先發達局數門檻)"
-                        elif not sp_cands: 
-                            first_team['SP'] = "無 (先發貢獻值皆為負)"
-                        else:
-                            best_sp = max(sp_cands.items(), key=lambda x: x[1]['eWAR'])
-                            best_name = best_sp[0]
+                        sp_cands = {k: v for k, v in pitchers.items() if v.get('Qual', False) and v['eWAR'] > 0}
+                        if sp_cands: 
+                            b_sp = max(sp_cands.items(), key=lambda x: x[1]['eWAR'])[0]
                             if is_rs_fin:
-                                all_mlb_counts[best_name] = all_mlb_counts.get(best_name, 0) + 1
-                                cnt = all_mlb_counts[best_name]
-                                first_team['SP'] = f"{best_name} (eWAR {best_sp[1]['eWAR']:.1f}, {best_sp[1]['ERA']:.2f} ERA){f' ★第{cnt}次' if cnt > 1 else ''}"
-                            else:
-                                first_team['SP'] = f"{best_name} (eWAR {best_sp[1]['eWAR']:.1f}, {best_sp[1]['ERA']:.2f} ERA) (領跑中)"
-                    else: 
-                        first_team['SP'] = "無 (無投手資料)"
-                        
-                    rp_base = {k: v for k, v in pitchers.items() if v.get('SV', 0) > 0 or v.get('HLD', 0) > 0}
-                    if not rp_base: 
-                        first_team['RP'] = "無 (無人有中繼/救援紀錄)"
-                    else:
-                        rp_cands = {k: v for k, v in rp_base.items() if v['eWAR'] > 0}
-                        if not rp_cands: 
-                            first_team['RP'] = "無 (牛棚貢獻值皆為負)"
-                        else:
-                            best_rp = max(rp_cands.items(), key=lambda x: x[1]['eWAR'])
-                            best_name = best_rp[0]
+                                all_mlb_counts[b_sp] = all_mlb_counts.get(b_sp, 0) + 1
+                                cnt = all_mlb_counts[b_sp]
+                                first_team['SP'] = f"{b_sp} (eWAR {sp_cands[b_sp]['eWAR']:.1f}, {sp_cands[b_sp]['ERA']:.2f} ERA){f' ★第{cnt}次' if cnt > 1 else ''}"
+                            else: first_team['SP'] = f"{b_sp} (eWAR {sp_cands[b_sp]['eWAR']:.1f}) (領跑中)"
+                            
+                        rp_cands = {k: v for k, v in pitchers.items() if (v.get('SV',0)>0 or v.get('HLD',0)>0) and v['eWAR'] > 0}
+                        if rp_cands: 
+                            b_rp = max(rp_cands.items(), key=lambda x: x[1]['eWAR'])[0]
                             if is_rs_fin:
-                                all_mlb_counts[best_name] = all_mlb_counts.get(best_name, 0) + 1
-                                cnt = all_mlb_counts[best_name]
-                                first_team['RP'] = f"{best_name} (eWAR {best_rp[1]['eWAR']:.1f}, {int(best_rp[1]['SV'])} SV){f' ★第{cnt}次' if cnt > 1 else ''}"
-                            else:
-                                first_team['RP'] = f"{best_name} (eWAR {best_rp[1]['eWAR']:.1f}, {int(best_rp[1]['SV'])} SV) (領跑中)"
-                else:
-                    empty_msg = "無 (賽事數據不足)"
-                    for p in ['C', '1B', '2B', '3B', 'SS', 'OF', 'DH', 'SP', 'RP']: first_team[p] = empty_msg
-                    
+                                all_mlb_counts[b_rp] = all_mlb_counts.get(b_rp, 0) + 1
+                                cnt = all_mlb_counts[b_rp]
+                                first_team['RP'] = f"{b_rp} (eWAR {rp_cands[b_rp]['eWAR']:.1f}, {int(rp_cands[b_rp]['SV'])} SV){f' ★第{cnt}次' if cnt > 1 else ''}"
+                            else: first_team['RP'] = f"{b_rp} (eWAR {rp_cands[b_rp]['eWAR']:.1f}) (領跑中)"
+                
                 tc1, tc2, tc3 = st.columns(3)
                 tc1.markdown(f"**⚾ 先發投手 (SP)**：\n{first_team.get('SP', '無')}\n\n**🔒 後援投手 (RP)**：\n{first_team.get('RP', '無')}\n\n**🎯 捕手 (C)**：\n{first_team.get('C', '無')}")
                 tc2.markdown(f"**🧱 一壘手 (1B)**：\n{first_team.get('1B', '無')}\n\n**⚡ 二壘手 (2B)**：\n{first_team.get('2B', '無')}\n\n**🔥 三壘手 (3B)**：\n{first_team.get('3B', '無')}\n\n**✨ 游擊手 (SS)**：\n{first_team.get('SS', '無')}")
                 tc3.markdown(f"**🦅 外野手 (OF)**：\n{first_team.get('OF', '無')}\n\n**☄️ 指定打擊 (DH)**：\n{first_team.get('DH', '無')}")
 
     with t_game_mvps:
-        st.subheader("🏅 歷場單場 MVP 榮譽榜")
-        st.caption("系統透過大數據演算法 (Game Score)，自動從勝隊中選出單場貢獻最高的 MVP (和局則兩隊均可角逐)！")
-        
+        st.subheader("🏅 歷場單場 MVP 榮譽榜與投打走勢")
         all_time_mvps = {}
         season_mvps_data = {}
+        curr_p_mvp_cnt, curr_b_mvp_cnt = 0, 0
         
         for s_idx in range(1, max_season + 1):
             s_pref = f"[S{s_idx}]"
-            b_s = df_b_full[df_b_full['賽事階段'].astype(str).str.contains(s_pref, regex=False)] if not df_b_full.empty else pd.DataFrame()
-            p_s = df_p_full[df_p_full['賽事階段'].astype(str).str.contains(s_pref, regex=False)] if not df_p_full.empty else pd.DataFrame()
+            b_s = df_b_clean[df_b_clean['賽事階段'].astype(str).str.contains(s_pref, regex=False)] if not df_b_clean.empty else pd.DataFrame()
+            p_s = df_p_clean[df_p_clean['賽事階段'].astype(str).str.contains(s_pref, regex=False)] if not df_p_clean.empty else pd.DataFrame()
+            if b_s.empty and p_s.empty: continue
             
-            if b_s.empty and p_s.empty:
-                continue
-                
-            stages = set()
-            if not b_s.empty: stages.update(b_s['賽事階段'].unique())
-            if not p_s.empty: stages.update(p_s['賽事階段'].unique())
-            
-            def get_stage_sort_keys(stage_str):
-                s_str = str(stage_str)
-                m1 = re.search(r'第(\d+)場', s_str)
-                m2 = re.search(r'[Gg](\d+)', s_str)
-                g_num = int(m1.group(1)) if m1 else (int(m2.group(1)) if m2 else 0)
-                is_ws = 1 if '世界大賽' in s_str or 'WS' in s_str.upper() else 0
-                return is_ws, g_num
-                
-            sorted_stages = sorted(list(stages), key=lambda x: get_stage_sort_keys(x))
+            stages = set(b_s['賽事階段'].unique()) | set(p_s['賽事階段'].unique())
+            sorted_stages = sorted(list(stages), key=lambda x: (1 if '世界大賽' in str(x) else 0, int(re.search(r'G(\d+)|第(\d+)場', str(x)).group(1) or re.search(r'G(\d+)|第(\d+)場', str(x)).group(2)) if re.search(r'G(\d+)|第(\d+)場', str(x)) else 0))
             season_results = []
             season_counts = {}
             
             for stage in sorted_stages:
-                is_ws, g_num = get_stage_sort_keys(stage)
-                g_b = b_s[b_s['賽事階段'] == stage] if not b_s.empty else pd.DataFrame()
-                g_p = p_s[p_s['賽事階段'] == stage] if not p_s.empty else pd.DataFrame()
-                
+                g_b = b_s[b_s['賽事階段'] == stage]
+                g_p = p_s[p_s['賽事階段'] == stage]
                 w_team = None
                 if not g_p.empty:
-                    w_rows = g_p[g_p['勝敗'].astype(str).str.contains('勝')]
-                    if not w_rows.empty:
-                        w_team = w_rows.iloc[0]['球隊']
-                        
+                    w_rows = g_p[g_p['勝'] == 1]
+                    if not w_rows.empty: w_team = w_rows.iloc[0]['球隊']
+                
                 cands = []
                 if not g_b.empty:
                     for _, r in g_b.iterrows():
-                        if w_team and r['球隊'] != w_team: 
-                            continue
-                        
-                        stats_vals = []
-                        for col in ['打數', '安打', '二壘安打', '三壘安打', '全壘打', '打點', '得分', '四壞球', '三振']:
-                            val = pd.to_numeric(r.get(col, 0), errors='coerce')
-                            stats_vals.append(0 if pd.isna(val) else val)
-                        ab, h, h2, h3, hr, rbi, run, bb, so = stats_vals
-                        
-                        score = global_game_mvp_score_b(ab, h, h2, h3, hr, rbi, run, bb, so, s_idx)
-                        cands.append({'name': f"[{r['球隊']}] {r['球員姓名']}", 'score': score, 'raw_rbi': rbi})
-                        
+                        if w_team and r['球隊'] != w_team: continue
+                        vals = [r.get(col, 0) for col in ['打數', '安打', '二壘安打', '三壘安打', '全壘打', '打點', '得分', '四壞球', '三振']]
+                        # ✨ 統一呼叫全域的大聯盟單場 MVP 引擎
+                        score = global_game_mvp_score_b(vals[0], vals[1], vals[2], vals[3], vals[4], vals[5], vals[6], vals[7], vals[8], s_idx)
+                        cands.append({'name': f"[{r['球隊']}] {r['球員姓名']}", 'score': score, 'type': 'Batter', 'raw_rbi': vals[5]})
                 if not g_p.empty:
                     for _, r in g_p.iterrows():
-                        if w_team and r['球隊'] != w_team: 
-                            continue
-                        o_int = pd.to_numeric(r.get('局數(整數)', 0), errors='coerce')
-                        o_dec = pd.to_numeric(r.get('局數(出局數)', 0), errors='coerce')
-                        outs = (0 if pd.isna(o_int) else o_int)*3 + (0 if pd.isna(o_dec) else o_dec)
-                        ip = outs / 3.0
-                        
-                        stats_vals_p = []
-                        for col in ['自責分', '被安打', '四壞球', '奪三振']:
-                            val = pd.to_numeric(r.get(col, 0), errors='coerce')
-                            stats_vals_p.append(0 if pd.isna(val) else val)
-                        er, h_allowed, bb_allowed, k = stats_vals_p
-                        
-                        w = 1 if '勝' in str(r.get('勝敗','')) else 0
-                        sv = 1 if '救援' in str(r.get('勝敗','')) else 0
-                        hld = 1 if '中繼' in str(r.get('勝敗','')) else 0
-                        
-                        score = global_game_mvp_score_p(ip, er, h_allowed, bb_allowed, k, w, sv, hld, s_idx)
-                        cands.append({'name': f"[{r['球隊']}] {r['投手姓名']}", 'score': score, 'raw_rbi': 0})
+                        if w_team and r['球隊'] != w_team: continue
+                        outs = r.get('局數(整數)', 0)*3 + r.get('局數(出局數)', 0)
+                        p_v = [r.get(c, 0) for c in ['自責分', '被安打', '四壞球', '奪三振']]
+                        w_f, sv_f, hld_f = r.get('勝', 0), r.get('救援', 0), r.get('中繼', 0)
+                        # ✨ 統一呼叫全域的大聯盟單場 MVP 引擎
+                        score = global_game_mvp_score_p(outs/3.0, p_v[0], p_v[1], p_v[2], p_v[3], w_f, sv_f, hld_f, s_idx)
+                        cands.append({'name': f"[{r['球隊']}] {r['投手姓名']}", 'score': score, 'type': 'Pitcher', 'raw_rbi': 0})
                 
                 if cands:
                     cands.sort(key=lambda x: (x['score'], x['raw_rbi']), reverse=True)
@@ -5103,46 +5290,29 @@ with tab5:
                     season_counts[winner_name] = season_counts.get(winner_name, 0) + 1
                     all_time_mvps[winner_name] = all_time_mvps.get(winner_name, 0) + 1
                     
-                    stage_cl = str(stage)
-                    season_results.append({
-                        '_is_ws': is_ws,
-                        '_g_num': g_num,
-                        '賽事階段': stage_cl,
-                        'MVP 球員': winner_name,
-                        '本季累積': f"{season_counts[winner_name]} 次"
-                    })
-            
-            if season_results:
-                df_season = pd.DataFrame(season_results)
-                df_season = df_season.sort_values(by=['_is_ws', '_g_num'], ascending=[True, True])
-                df_season = df_season.drop(columns=['_is_ws', '_g_num']).reset_index(drop=True)
-                season_mvps_data[s_idx] = df_season
+                    if s_idx == max_season:
+                        if mvp_cand['type'] == 'Pitcher': curr_p_mvp_cnt += 1
+                        else: curr_b_mvp_cnt += 1
+                        
+                    season_results.append({'賽事階段': str(stage).strip(), 'MVP 球員': winner_name, '本季累積': f"{season_counts[winner_name]} 次"})
+            if season_results: season_mvps_data[s_idx] = pd.DataFrame(season_results)
 
-        st.markdown("#### 🏆 歷史累積單場 MVP 排行榜 (Top 5)")
-        if all_time_mvps:
-            top_5_mvps = sorted(all_time_mvps.items(), key=lambda x: x[1], reverse=True)[:5]
-            medals = ["🥇", "🥈", "🥉", "🏅", "🏅"]
-            cols = st.columns(min(len(top_5_mvps), 5))
-            for i, (name, count) in enumerate(top_5_mvps):
-                cols[i].metric(f"{medals[i]} {name}", f"{count} 次")
-        else:
-            st.info("尚無歷史 MVP 紀錄。")
+        top_5_mvps = sorted(all_time_mvps.items(), key=lambda x: x[1], reverse=True)[:5]
+        medals = ["🥇", "🥈", "🥉", "🏅", "🏅"]
+        cols = st.columns(5)
+        for i, (name, count) in enumerate(top_5_mvps): cols[i].metric(f"{medals[i]} {name}", f"{count} 次")
             
         st.divider()
-        st.markdown("#### 📖 逐季歷場 MVP 明細")
-        
-        for s_idx in range(1, max_season + 1):
-            if s_idx not in season_mvps_data: 
-                continue
-            
-            is_expanded = (s_idx == max_season)
-            with st.expander(f"📖 Season {s_idx} 歷場 MVP", expanded=is_expanded):
-                df_s = season_mvps_data[s_idx]
-                if not df_s.empty:
-                    df_s.index = np.arange(1, len(df_s) + 1)
-                    st.dataframe(df_s, use_container_width=True)
-                else:
-                    st.info("該季尚無單場 MVP 紀錄。")
+        st.markdown("#### 📊 投打戰力失衡觀測窗")
+        if curr_p_mvp_cnt + curr_b_mvp_cnt > 0:
+            p_pct = (curr_p_mvp_cnt / (curr_p_mvp_cnt + curr_b_mvp_cnt)) * 100
+            st.info(f"💡 **轉播台特別通報**：本賽季（Season {max_season}）目前共產生 **{curr_p_mvp_cnt + curr_b_mvp_cnt}** 場單場 MVP。其中投手獲獎 **{curr_p_mvp_cnt}次（佔 {p_pct:.1f}%）**，打者獲獎 **{curr_b_mvp_cnt}次**。數據證實：系統已為3局制進行投打權重特化校正，勝負掌控力目前完美分配！")
+        else: st.caption("暫無本季數據。")
+
+        for s_idx in reversed(range(1, max_season + 1)):
+            if s_idx in season_mvps_data:
+                with st.expander(f"📖 Season {s_idx} 歷場 MVP 明細", expanded=(s_idx == max_season)):
+                    st.dataframe(season_mvps_data[s_idx], use_container_width=True, hide_index=True)
 
     with t_leaders:
         st.subheader("👑 歷史隊史紀錄與單季極限")
@@ -5150,33 +5320,34 @@ with tab5:
         
         team_meta_summary = {}
         for team in ['LAA', 'LAD']:
-            t_p_raw = df_p_full[df_p_full['球隊'] == team].sort_values('時間戳記') if not df_p_full.empty else pd.DataFrame()
-            t_b_raw = df_b_full[df_b_full['球隊'] == team] if not df_b_full.empty else pd.DataFrame()
-            tot_hits = pd.to_numeric(t_b_raw['安打'], errors='coerce').fillna(0).sum() if not t_b_raw.empty else 0
-            tot_hr = pd.to_numeric(t_b_raw['全壘打'], errors='coerce').fillna(0).sum() if not t_b_raw.empty else 0
-            tot_rbi = pd.to_numeric(t_b_raw['打點'], errors='coerce').fillna(0).sum() if not t_b_raw.empty else 0
-            tot_so = pd.to_numeric(t_p_raw['奪三振'], errors='coerce').fillna(0).sum() if not t_p_raw.empty else 0
+            t_p_raw = df_p_clean[df_p_clean['球隊'] == team] if not df_p_clean.empty else pd.DataFrame()
+            t_b_raw = df_b_clean[df_b_clean['球隊'] == team] if not df_b_clean.empty else pd.DataFrame()
+            tot_hits = t_b_raw['安打'].sum() if not t_b_raw.empty else 0
+            tot_hr = t_b_raw['全壘打'].sum() if not t_b_raw.empty else 0
+            tot_rbi = t_b_raw['打點'].sum() if not t_b_raw.empty else 0
+            tot_so = t_p_raw['奪三振'].sum() if not t_p_raw.empty else 0
             
             h_w, h_l, h_d, a_w, a_l, a_d, oner_w, oner_l = 0, 0, 0, 0, 0, 0, 0, 0
-            if not df_p_full.empty:
-                for stage, group in df_p_full.groupby('賽事階段'):
+            if not df_p_clean.empty:
+                for stage, group in df_p_clean.groupby('賽事階段'):
                     g_team = group[group['球隊'] == team]
-                    if g_team.empty: 
-                        continue
-                    is_w = any('勝' in str(x) for x in g_team['勝敗'].values)
-                    is_l = any('敗' in str(x) for x in g_team['勝敗'].values)
-                    laa_ra = pd.to_numeric(group[group['球隊']=='LAA']['失分'], errors='coerce').fillna(0).sum()
-                    lad_ra = pd.to_numeric(group[group['球隊']=='LAD']['失分'], errors='coerce').fillna(0).sum()
+                    if g_team.empty: continue
+                    is_w = g_team['勝'].sum() > 0
+                    is_l = g_team['敗'].sum() > 0
+                    is_d = len(g_team) > 0 and not is_w and not is_l
+                    
+                    laa_ra = group[group['球隊']=='LAA']['失分'].sum()
+                    lad_ra = group[group['球隊']=='LAD']['失分'].sum()
                     if abs(laa_ra - lad_ra) == 1:
                         if is_w: oner_w += 1
                         elif is_l: oner_l += 1
                         
-                    h_team = global_home_dict.get(str(stage), "Unknown")
-                    if team == h_team: 
+                    h_team = get_home_team_tab5(str(stage))
+                    if team == h_team:
                         if is_w: h_w += 1
                         elif is_l: h_l += 1
                         else: h_d += 1
-                    else: 
+                    elif h_team != "Unknown":
                         if is_w: a_w += 1
                         elif is_l: a_l += 1
                         else: a_d += 1
@@ -5185,16 +5356,6 @@ with tab5:
                 'hits': int(tot_hits), 'hr': int(tot_hr), 'rbi': int(tot_rbi), 'so': int(tot_so),
                 'home_rec': f"{h_w}勝 {h_l}敗 {h_d}和", 'away_rec': f"{a_w}勝 {a_l}敗 {a_d}和", 'one_run': f"{oner_w}勝 {oner_l}敗"
             }
-
-        b_all = b_saber
-        p_all = p_saber
-        
-        def get_top3_str(df, sort_col, name_col):
-            if df.empty or sort_col not in df.columns: 
-                return "無"
-            top3 = df.sort_values(by=sort_col, ascending=False).head(3)
-            res = [f"{i+1}. {r[name_col]} ({int(r[sort_col])})" for i, (_, r) in enumerate(top3.iterrows()) if r[sort_col] > 0]
-            return "  \n".join(res) if res else "無"
 
         c_laa, c_lad = st.columns(2)
         for team, col_obj in [("LAA", c_laa), ("LAD", c_lad)]:
@@ -5211,197 +5372,186 @@ with tab5:
                     st.markdown(f"📐 **一分差生死戰**：{meta['one_run']}")
                 st.markdown("---")
                 st.markdown("##### 🎖️ 隊史累積排行榜 (Top 3)")
-                if not b_all.empty:
-                    tb = b_all[b_all['球隊']==team]
-                    st.caption(f"**🏏 安打王**：\n{get_top3_str(tb, '安打', '球員姓名')}")
-                    st.caption(f"**🚀 全壘打王**：\n{get_top3_str(tb, '全壘打', '球員姓名')}")
-                    st.caption(f"**🔥 打點王**：\n{get_top3_str(tb, '打點', '球員姓名')}")
-                if not p_all.empty:
-                    tp = p_all[p_all['球隊']==team]
+                def get_top3_str(df, sort_col, name_col):
+                    if df.empty or sort_col not in df.columns: return "無"
+                    top3 = df.sort_values(by=sort_col, ascending=False).head(3)
+                    res = [f"{i+1}. {r[name_col]} ({int(r[sort_col])})" for i, (_, r) in enumerate(top3.iterrows()) if r[sort_col] > 0]
+                    return "  \n".join(res) if res else "無"
+
+                st.caption(f"**🏏 安打王**：\n{get_top3_str(b_saber[b_saber['球隊']==team], '安打', '球員姓名')}")
+                st.caption(f"**🚀 全壘打王**：\n{get_top3_str(b_saber[b_saber['球隊']==team], '全壘打', '球員姓名')}")
+                st.caption(f"**🔥 打點王**：\n{get_top3_str(b_saber[b_saber['球隊']==team], '打點', '球員姓名')}")
+                if not p_saber.empty:
+                    tp = p_saber[p_saber['球隊']==team]
                     st.caption(f"**⚾ 勝投王**：\n{get_top3_str(tp, '勝', '投手姓名')}")
                     st.caption(f"**🌪️ 三振王**：\n{get_top3_str(tp, '奪三振', '投手姓名')}")
                     st.caption(f"**🔒 救援王**：\n{get_top3_str(tp, '救援', '投手姓名')}")
         st.divider()
 
-        # ✨【超級大手術】：現場動態精算全歷史賽季 WAR (嚴格限定例行賽)
+        # ✨【歷史單一賽季極限 WAR】完全獨立精算，確保無懈可擊
         all_season_war_records = []
-        pos_adj_dict = {"C": 0.15, "SS": 0.12, "2B": 0.05, "3B": 0.05, "CF": 0.05, "LF": 0.00, "RF": 0.00, "1B": -0.05, "DH": -0.12, "PH": -0.12, "PR": -0.12}
+        team_season_b_dict, team_season_p_dict = {}, {} 
         
-        if not df_b_full.empty or not df_p_full.empty:
-            all_seasons_found = set()
-            if not df_b_full.empty:
-                df_b_full['Season_Num'] = df_b_full['賽事階段'].astype(str).apply(lambda x: re.search(r'\[S(\d+)\]', x).group(1) if re.search(r'\[S(\d+)\]', x) else '1')
-                all_seasons_found.update(df_b_full['Season_Num'].unique())
-            if not df_p_full.empty:
-                df_p_full['Season_Num'] = df_p_full['賽事階段'].astype(str).apply(lambda x: re.search(r'\[S(\d+)\]', x).group(1) if re.search(r'\[S(\d+)\]', x) else '1')
-                all_seasons_found.update(df_p_full['Season_Num'].unique())
-                
-            for s in sorted(list(all_seasons_found), key=int):
-                s_str = str(s)
-                # ✨ 嚴格限制「例行賽」，與大聯盟單季極限紀錄 (不含季後賽) 對齊！
-                s_b = df_b_full[(df_b_full['Season_Num'] == s_str) & (df_b_full['賽事階段'].astype(str).str.contains("例行賽", regex=False))].copy() if not df_b_full.empty else pd.DataFrame()
-                s_p = df_p_full[(df_p_full['Season_Num'] == s_str) & (df_p_full['賽事階段'].astype(str).str.contains("例行賽", regex=False))].copy() if not df_p_full.empty else pd.DataFrame()
-                
-                lg_woba = 0.320
-                if not s_b.empty:
-                    for c in ['打席','打數','安打','二壘安打','三壘安打','全壘打','四壞球','三振']:
-                        s_b[c] = pd.to_numeric(s_b.get(c, 0), errors='coerce').fillna(0)
-                    t_pa = s_b['打席'].sum()
-                    t_h = s_b['安打'].sum()
-                    t_bb = s_b['四壞球'].sum()
-                    t_2b = s_b['二壘安打'].sum()
-                    t_3b = s_b['三壘安打'].sum()
-                    t_hr = s_b['全壘打'].sum()
-                    t_1b = t_h - t_2b - t_3b - t_hr
-                    lg_woba_num = 0.69 * t_bb + 0.88 * t_1b + 1.25 * t_2b + 1.59 * t_3b + 2.06 * t_hr
-                    lg_woba = lg_woba_num / t_pa if t_pa > 0 else 0.320
+        for s in range(1, max_season + 1):
+            s_pref = f"[S{s}] 例行賽"
+            s_b = df_b_clean[df_b_clean['賽事階段'].astype(str).str.contains(s_pref, regex=False)].copy()
+            s_p = df_p_clean[df_p_clean['賽事階段'].astype(str).str.contains(s_pref, regex=False)].copy()
+            
+            if s_b.empty and s_p.empty: continue
+            
+            lg_woba = 0.320
+            if not s_b.empty:
+                t_pa = s_b['打席'].sum()
+                t_1b = s_b['安打'].sum() - s_b['二壘安打'].sum() - s_b['三壘安打'].sum() - s_b['全壘打'].sum()
+                if t_pa > 0:
+                    lg_woba = (0.69*s_b['四壞球'].sum() + 0.88*t_1b + 1.25*s_b['二壘安打'].sum() + 1.59*s_b['三壘安打'].sum() + 2.06*s_b['全壘打'].sum()) / t_pa
                     
-                lg_era_base = 4.50
-                if not s_p.empty:
-                    for c in ['局數(整數)','局數(出局數)','自責分','被全壘打','四壞球','奪三振']:
-                        s_p[c] = pd.to_numeric(s_p.get(c, 0), errors='coerce').fillna(0)
-                    l_er = s_p['自責分'].sum()
-                    l_ip = (s_p['局數(整數)'].sum() * 3 + s_p['局數(出局數)'].sum()) / 3.0
-                    if l_ip > 0: lg_era_base = (l_er * 9) / l_ip
+                for tm in ['LAA', 'LAD']:
+                    tm_b = s_b[s_b['球隊'] == tm]
+                    if not tm_b.empty:
+                        team_season_b_dict[f"[{tm}] [S{s}]"] = {
+                            'H': tm_b['安打'].sum(), 'HR': tm_b['全壘打'].sum(), 
+                            'RBI': tm_b['打點'].sum(), 'AB': tm_b['打數'].sum()
+                        }
+            
+            lg_era_base = 10.60
+            if not s_p.empty:
+                l_ip = (s_p['局數(整數)'].sum()*3 + s_p['局數(出局數)'].sum()) / 3.0
+                if l_ip > 0: lg_era_base = (s_p['自責分'].sum() * 9) / l_ip
+                
+                for tm in ['LAA', 'LAD']:
+                    tm_p = s_p[s_p['球隊'] == tm]
+                    if not tm_p.empty:
+                        outs_tm = tm_p['局數(整數)'].sum()*3 + tm_p['局數(出局數)'].sum()
+                        team_season_p_dict[f"[{tm}] [S{s}]"] = {
+                            'W': tm_p['勝'].sum(), 'K': tm_p['奪三振'].sum(), 
+                            'ER': tm_p['自責分'].sum(), 'IP': outs_tm / 3.0
+                        }
 
-                player_seas_war = {}
-                player_type = {}
-                
-                if not s_b.empty:
-                    b_agg = s_b.groupby('球員姓名').agg({'打席':'sum','打數':'sum','安打':'sum','二壘安打':'sum','三壘安打':'sum','全壘打':'sum','四壞球':'sum','守位': lambda x: x.value_counts().index[0] if not x.empty else 'DH'}).reset_index()
-                    for _, r in b_agg.iterrows():
-                        p_name = r['球員姓名']
-                        pa, ab, h, h2, h3, hr, bb = r['打席'], r['打數'], r['安打'], r['二壘安打'], r['三壘安打'], r['全壘打'], r['四壞球']
-                        p_1b = h - h2 - h3 - hr
-                        woba = (0.69 * bb + 0.88 * p_1b + 1.25 * h2 + 1.59 * h3 + 2.06 * hr) / max(1, pa)
-                        wrc_plus = ((woba / lg_woba) - 1) * 200 + 100 if lg_woba > 0 else 0
-                        ewar = (((wrc_plus - 70) / 80) + pos_adj_dict.get(r['守位'], -0.12)) * (pa / 15)
-                        player_seas_war[p_name] = player_seas_war.get(p_name, 0.0) + ewar
-                        player_type[p_name] = '打者'
-                        
-                if not s_p.empty:
-                    p_agg = s_p.groupby('投手姓名').agg({'局數(整數)':'sum','局數(出局數)':'sum','自責分':'sum','被全壘打':'sum','四壞球':'sum','奪三振':'sum'}).reset_index()
-                    s_rep_level = lg_era_base * 1.30
-                    s_era_div = max(1.5, lg_era_base * 0.2)
+            player_seas_war = {}
+            player_type = {}
+            pos_adj_dict = {"C": 0.15, "SS": 0.12, "2B": 0.05, "3B": 0.05, "CF": 0.05, "LF": 0.00, "RF": 0.00, "1B": -0.05, "DH": -0.12, "PH": -0.12, "PR": -0.12}
+            
+            if not s_b.empty:
+                b_agg = s_b.groupby(['球隊', '球員姓名']).agg({'打席':'sum','安打':'sum','二壘安打':'sum','三壘安打':'sum','全壘打':'sum','四壞球':'sum','守位': lambda x: x.value_counts().index[0] if not x.empty else 'DH'}).reset_index()
+                for _, r in b_agg.iterrows():
+                    pa, h, h2, h3, hr, bb = r['打席'], r['安打'], r['二壘安打'], r['三壘安打'], r['全壘打'], r['四壞球']
+                    if pa == 0: continue
+                    p_1b = h - h2 - h3 - hr
+                    woba = (0.69*bb + 0.88*p_1b + 1.25*h2 + 1.59*h3 + 2.06*hr) / pa
+                    wrc_p = ((woba / lg_woba) - 1) * 200 + 100 if lg_woba > 0 else 0
+                    ewar = (((wrc_p - 70) / 80) + pos_adj_dict.get(r.get('守位','DH'), -0.12)) * (pa / 15)
+                    name_key = f"[{r['球隊']}] {r['球員姓名']}"
+                    player_seas_war[name_key] = ewar
+                    player_type[name_key] = '打者'
                     
-                    for _, r in p_agg.iterrows():
-                        p_name = r['投手姓名']
-                        outs = r['局數(整數)'] * 3 + r['局數(出局數)']
-                        ip = outs / 3.0
-                        er, hr, bb, so = r['自責分'], r['被全壘打'], r['四壞球'], r['奪三振']
-                        era = (er * 9) / ip if ip > 0 else 0.0
-                        fip = (((13 * hr) + (3 * bb) - (2 * so)) / ip) + 3.10 if ip > 0 else 3.10
-                        
-                        # ✨ 全部套用現代防禦率指標，公平對齊全站總表計算邏輯
-                        tra = (era * 0.3) + (fip * 0.7)
-                        
-                        if ip == 0: ewar = -0.1 * er - 0.05 * bb
-                        else: ewar = ((s_rep_level - tra) / s_era_div) * (ip / 10)
-                        
-                        player_seas_war[p_name] = player_seas_war.get(p_name, 0.0) + ewar
-                        if p_name in player_type: player_type[p_name] = '二刀流'
-                        else: player_type[p_name] = '投手'
-                        
-                for p_name, total_war in player_seas_war.items():
-                    all_season_war_records.append({
-                        'Season': s, 'Name': p_name, 'eWAR': round(total_war, 1), 'Type': player_type[p_name]
-                    })
+            if not s_p.empty:
+                p_agg = s_p.groupby(['球隊', '投手姓名']).agg({'局數(整數)':'sum','局數(出局數)':'sum','自責分':'sum','被全壘打':'sum','四壞球':'sum','奪三振':'sum'}).reset_index()
+                for _, r in p_agg.iterrows():
+                    outs = r['局數(整數)']*3 + r['局數(出局數)']
+                    ip = outs/3.0
+                    er, hr, bb, so = r['自責分'], r['被全壘打'], r['四壞球'], r['奪三振']
+                    era = (er*9)/ip if ip>0 else 0.0
+                    fip = (((13*hr)+(3*bb)-(2*so))/ip)+3.10 if ip>0 else 3.10
+                    tra = (era * 0.3) + (fip * 0.7) if s >= 6 else (era + fip)/2.0
+                    
+                    s_rep_level = lg_era_base * 1.30
+                    era_div = max(1.5, lg_era_base * 0.2)
+                    
+                    if ip == 0: ewar = (-0.1*er-0.05*bb)
+                    else: ewar = ((s_rep_level - tra)/era_div)*(ip/10)
+                    
+                    name_key = f"[{r['球隊']}] {r['投手姓名']}"
+                    player_seas_war[name_key] = player_seas_war.get(name_key, 0.0) + ewar
+                    player_type[name_key] = '二刀流' if name_key in player_type else '投手'
+                    
+            for p_name, total_war in player_seas_war.items():
+                all_season_war_records.append({'Season': f"[S{s}]", 'Name': p_name, 'eWAR': round(total_war, 1), 'Type': player_type[p_name]})
 
         st.markdown("#### 🥇 歷史單一賽季極限紀錄 (Single-Season Records)")
         if all_season_war_records:
             df_all_war = pd.DataFrame(all_season_war_records)
             c_war1, c_war2, c_war3, c_war4 = st.columns(4)
             with c_war1:
-                st.markdown("**🏏 最高 WAR (打者)**")
-                b_war = df_all_war[df_all_war['Type'].isin(['打者', '二刀流'])].sort_values('eWAR', ascending=False)
-                for i, r in b_war.head(3).iterrows(): st.caption(f"🥇 {r['Name']} (S{r['Season']}): **{r['eWAR']:.1f}**")
+                st.markdown("**打者最高 WAR**")
+                for _, r in df_all_war[df_all_war['Type'].isin(['打者', '二刀流'])].sort_values('eWAR', ascending=False).head(3).iterrows(): st.caption(f"🥇 {r['Name']} {r['Season']}: **{r['eWAR']:.1f}**")
             with c_war2:
-                st.markdown("**⚾ 最高 WAR (投手)**")
-                p_war = df_all_war[df_all_war['Type'].isin(['投手', '二刀流'])].sort_values('eWAR', ascending=False)
-                for i, r in p_war.head(3).iterrows(): st.caption(f"🥇 {r['Name']} (S{r['Season']}): **{r['eWAR']:.1f}**")
+                st.markdown("**投手最高 WAR**")
+                for _, r in df_all_war[df_all_war['Type'].isin(['投手', '二刀流'])].sort_values('eWAR', ascending=False).head(3).iterrows(): st.caption(f"🥇 {r['Name']} {r['Season']}: **{r['eWAR']:.1f}**")
             with c_war3:
-                st.markdown("**💣 最低 WAR (打者)**")
-                b_bad = df_all_war[df_all_war['Type'].isin(['打者', '二刀流'])].sort_values('eWAR', ascending=True)
-                for i, r in b_bad.head(3).iterrows(): st.caption(f"💣 {r['Name']} (S{r['Season']}): **{r['eWAR']:.1f}**")
+                st.markdown("**打者最低 WAR**")
+                for _, r in df_all_war[df_all_war['Type'].isin(['打者', '二刀流'])].sort_values('eWAR', ascending=True).head(3).iterrows(): st.caption(f"💣 {r['Name']} {r['Season']}: **{r['eWAR']:.1f}**")
             with c_war4:
-                st.markdown("**🧨 最低 WAR (投手)**")
-                p_bad = df_all_war[df_all_war['Type'].isin(['投手', '二刀流'])].sort_values('eWAR', ascending=True)
-                for i, r in p_bad.head(3).iterrows(): st.caption(f"🧨 {r['Name']} (S{r['Season']}): **{r['eWAR']:.1f}**")
+                st.markdown("**投手最低 WAR**")
+                for _, r in df_all_war[df_all_war['Type'].isin(['投手', '二刀流'])].sort_values('eWAR', ascending=True).head(3).iterrows(): st.caption(f"🧨 {r['Name']} {r['Season']}: **{r['eWAR']:.1f}**")
         st.markdown("<br>", unsafe_allow_html=True)
 
         s_b_records, s_p_records = [], []
         for s in range(1, max_season + 1):
             pref = f"[S{s}] 例行賽"
-            s_b = df_b_full[df_b_full['賽事階段'].astype(str).str.contains(pref, regex=False)].copy()
-            s_p = df_p_full[df_p_full['賽事階段'].astype(str).str.contains(pref, regex=False)].copy()
+            s_b = df_b_clean[df_b_clean['賽事階段'].astype(str).str.contains(pref, regex=False)].copy()
+            s_p = df_p_clean[df_p_clean['賽事階段'].astype(str).str.contains(pref, regex=False)].copy()
             if not s_b.empty:
-                for c in ['打席','打數','安打','全壘打','打點']: 
-                    if c not in s_b.columns: s_b[c] = 0
-                    s_b[c] = pd.to_numeric(s_b[c], errors='coerce').fillna(0)
                 min_pa = max(1.0, s_b['賽事階段'].nunique() * 1.0)
-                s_agg = s_b.groupby(['球隊', '球員姓名']).sum(numeric_only=True).reset_index()
-                for _, r in s_agg.iterrows():
-                    avg = r['安打']/max(1, r['打數']) if r['打席'] >= min_pa else 0
-                    s_b_records.append({'Season': s, 'Name': f"[{r['球隊']}] {r['球員姓名']}", 'HR': r['全壘打'], 'RBI': r['打點'], 'H': r['安打'], 'AVG': avg})
+                for _, r in s_b.groupby(['球隊', '球員姓名']).sum(numeric_only=True).reset_index().iterrows():
+                    s_b_records.append({'Season': f"[S{s}]", 'Name': f"[{r['球隊']}] {r['球員姓名']}", 'HR': r['全壘打'], 'RBI': r['打點'], 'H': r['安打'], 'AVG': r['安打']/max(1, r['打數']) if r['打席'] >= min_pa else 0})
             if not s_p.empty:
-                s_p['勝'] = s_p['勝敗'].astype(str).apply(lambda x: 1 if '勝' in x else 0)
-                s_p['救援'] = s_p['勝敗'].astype(str).apply(lambda x: 1 if '救援' in x else 0)
-                for c in ['局數(整數)', '局數(出局數)', '奪三振', '自責分']: 
-                    if c not in s_p.columns: s_p[c] = 0
-                    s_p[c] = pd.to_numeric(s_p[c], errors='coerce').fillna(0)
+                min_ip = max(0.1, s_p['賽事階段'].nunique() * 0.25)
                 p_agg = s_p.groupby(['球隊', '投手姓名']).sum(numeric_only=True).reset_index()
-                min_ip = max(0.1, s_p['賽事階段'].nunique() * 0.33)
                 for _, r in p_agg.iterrows():
                     ip = (r['局數(整數)']*3 + r['局數(出局數)'])/3.0
-                    era = (r['自責分']*9)/max(1, ip) if ip >= min_ip else 99.9
-                    s_p_records.append({'Season': s, 'Name': f"[{r['球隊']}] {r['投手姓名']}", 'W': r['勝'], 'SV': r['救援'], 'K': r['奪三振'], 'ERA': era})
+                    s_p_records.append({'Season': f"[S{s}]", 'Name': f"[{r['球隊']}] {r['投手姓名']}", 'W': r['勝'], 'SV': r['救援'], 'K': r['奪三振'], 'ERA': (r['自責分']*9)/ip if ip >= min_ip else 99.9})
                             
         c3, c4 = st.columns(2)
         with c3:
-            st.caption("🏏 **打擊單季極限**")
+            st.caption("🏏 **個人打擊單季極限**")
             if s_b_records:
                 df_s_b = pd.DataFrame(s_b_records)
-                st.markdown(f"- **最多全壘打**：{int(df_s_b.loc[df_s_b['HR'].idxmax()]['HR'])} 轟 ({df_s_b.loc[df_s_b['HR'].idxmax()]['Name']}, S{df_s_b.loc[df_s_b['HR'].idxmax()]['Season']})")
-                st.markdown(f"- **最多打點**：{int(df_s_b.loc[df_s_b['RBI'].idxmax()]['RBI'])} 分 ({df_s_b.loc[df_s_b['RBI'].idxmax()]['Name']}, S{df_s_b.loc[df_s_b['RBI'].idxmax()]['Season']})")
-                st.markdown(f"- **最多安打**：{int(df_s_b.loc[df_s_b['H'].idxmax()]['H'])} 支 ({df_s_b.loc[df_s_b['H'].idxmax()]['Name']}, S{df_s_b.loc[df_s_b['H'].idxmax()]['Season']})")
-                if df_s_b['AVG'].max() > 0: st.markdown(f"- **最高打擊率**：{df_s_b.loc[df_s_b['AVG'].idxmax()]['AVG']:.3f} ({df_s_b.loc[df_s_b['AVG'].idxmax()]['Name']}, S{df_s_b.loc[df_s_b['AVG'].idxmax()]['Season']})")
+                st.markdown(f"- **最多全壘打**：{int(df_s_b.loc[df_s_b['HR'].idxmax()]['HR'])} 轟 ({df_s_b.loc[df_s_b['HR'].idxmax()]['Name']} {df_s_b.loc[df_s_b['HR'].idxmax()]['Season']})")
+                st.markdown(f"- **最多打點**：{int(df_s_b.loc[df_s_b['RBI'].idxmax()]['RBI'])} 分 ({df_s_b.loc[df_s_b['RBI'].idxmax()]['Name']} {df_s_b.loc[df_s_b['RBI'].idxmax()]['Season']})")
+                st.markdown(f"- **最多安打**：{int(df_s_b.loc[df_s_b['H'].idxmax()]['H'])} 支 ({df_s_b.loc[df_s_b['H'].idxmax()]['Name']} {df_s_b.loc[df_s_b['H'].idxmax()]['Season']})")
+                if df_s_b['AVG'].max() > 0: st.markdown(f"- **最高打擊率**：{df_s_b.loc[df_s_b['AVG'].idxmax()]['AVG']:.3f} ({df_s_b.loc[df_s_b['AVG'].idxmax()]['Name']} {df_s_b.loc[df_s_b['AVG'].idxmax()]['Season']})")
+            
+            st.markdown("<br>", unsafe_allow_html=True)
+            st.caption("🔴🔵 **團隊打擊單季極限**")
+            if team_season_b_dict:
+                df_tm_b = pd.DataFrame.from_dict(team_season_b_dict, orient='index').reset_index()
+                st.markdown(f"- **團隊單季最多轟**：{int(df_tm_b['HR'].max())} 轟 ({df_tm_b.loc[df_tm_b['HR'].idxmax()]['index']})")
+                st.markdown(f"- **團隊單季最多打點**：{int(df_tm_b['RBI'].max())} 分 ({df_tm_b.loc[df_tm_b['RBI'].idxmax()]['index']})")
+                st.markdown(f"- **團隊單季最高打擊率**：{(df_tm_b['H']/df_tm_b['AB']).max():.3f} ({df_tm_b.loc[(df_tm_b['H']/df_tm_b['AB']).idxmax()]['index']})")
         with c4:
-            st.caption("⚾ **投球單季極限**")
+            st.caption("⚾ **個人投球單季極限**")
             if s_p_records:
                 df_s_p = pd.DataFrame(s_p_records)
-                st.markdown(f"- **最多勝投**：{int(df_s_p.loc[df_s_p['W'].idxmax()]['W'])} 勝 ({df_s_p.loc[df_s_p['W'].idxmax()]['Name']}, S{df_s_p.loc[df_s_p['W'].idxmax()]['Season']})")
-                st.markdown(f"- **最多三振**：{int(df_s_p.loc[df_s_p['K'].idxmax()]['K'])} 次 ({df_s_p.loc[df_s_p['K'].idxmax()]['Name']}, S{df_s_p.loc[df_s_p['K'].idxmax()]['Season']})")
+                st.markdown(f"- **最多勝投**：{int(df_s_p.loc[df_s_p['W'].idxmax()]['W'])} 勝 ({df_s_p.loc[df_s_p['W'].idxmax()]['Name']} {df_s_p.loc[df_s_p['W'].idxmax()]['Season']})")
+                st.markdown(f"- **最多三振**：{int(df_s_p.loc[df_s_p['K'].idxmax()]['K'])} 次 ({df_s_p.loc[df_s_p['K'].idxmax()]['Name']} {df_s_p.loc[df_s_p['K'].idxmax()]['Season']})")
                 era_min = df_s_p[df_s_p['ERA'] < 99.9]
-                if not era_min.empty: st.markdown(f"- **最低防禦率**：{era_min.loc[era_min['ERA'].idxmin()]['ERA']:.2f} ({era_min.loc[era_min['ERA'].idxmin()]['Name']}, S{era_min.loc[era_min['ERA'].idxmin()]['Season']})")
+                if not era_min.empty: st.markdown(f"- **最低防禦率**：{era_min.loc[era_min['ERA'].idxmin()]['ERA']:.2f} ({era_min.loc[era_min['ERA'].idxmin()]['Name']} {era_min.loc[era_min['ERA'].idxmin()]['Season']})")
+            
+            st.markdown("<br>", unsafe_allow_html=True)
+            st.caption("🔴🔵 **團隊投球單季極限**")
+            if team_season_p_dict:
+                df_tm_p = pd.DataFrame.from_dict(team_season_p_dict, orient='index').reset_index()
+                st.markdown(f"- **團隊單季最多勝**：{int(df_tm_p['W'].max())} 勝 ({df_tm_p.loc[df_tm_p['W'].idxmax()]['index']})")
+                st.markdown(f"- **團隊單季最多三振**：{int(df_tm_p['K'].max())} 次 ({df_tm_p.loc[df_tm_p['K'].idxmax()]['index']})")
+                st.markdown(f"- **團隊單季最低防禦率**：{(df_tm_p['ER']*9/df_tm_p['IP']).min():.2f} ({df_tm_p.loc[(df_tm_p['ER']*9/df_tm_p['IP']).idxmin()]['index']})")
 
     with t_milestones:
         st.subheader("⏳ 偉大里程碑追蹤器 (Milestones Tracker)")
-        st.caption("系統自動掃描全聯盟，倒數即將達成的各項歷史指標 (僅顯示目前累積大於 2 且差距 3 以內的目標)。")
         pending_milestones = []
         def add_milestone(type_str, name, curr_val, targets):
             if curr_val <= 2: return 
             next_t = next((t for t in targets if curr_val < t), None)
-            if next_t and (next_t - curr_val) <= 3:
-                pending_milestones.append({'Type': type_str, 'Name': name, 'Curr': curr_val, 'Target': next_t, 'M': next_t - curr_val})
+            if next_t and (next_t - curr_val) <= 3: pending_milestones.append({'Type': type_str, 'Name': name, 'Curr': curr_val, 'Target': next_t, 'M': next_t - curr_val})
 
-        b_career = df_b_full.copy()
-        for c in ['安打', '全壘打', '打點']: 
-            if c not in b_career.columns: b_career[c] = 0
-            b_career[c] = pd.to_numeric(b_career[c], errors='coerce').fillna(0)
-        b_c_agg = b_career.groupby(['球隊', '球員姓名']).sum(numeric_only=True).reset_index()
-        for _, r in b_c_agg.iterrows():
+        for _, r in df_b_clean.groupby(['球隊', '球員姓名']).sum(numeric_only=True).reset_index().iterrows():
             name = f"[{r['球隊']}] {r['球員姓名']}"
             add_milestone('🏏 生涯安打', name, r['安打'], [15, 30, 50, 100, 150, 200])
             add_milestone('🚀 生涯全壘打', name, r['全壘打'], [5, 10, 20, 30, 50, 100])
             add_milestone('🔥 生涯打點', name, r['打點'], [10, 30, 50, 100, 150])
         
-        p_career = df_p_full.copy()
-        if not p_career.empty:
-            p_career['勝'] = p_career['勝敗'].astype(str).apply(lambda x: 1 if '勝' in x else 0)
-            p_career['救援'] = p_career['勝敗'].astype(str).apply(lambda x: 1 if '救援' in x else 0)
-            p_career['奪三振'] = pd.to_numeric(p_career.get('奪三振', 0), errors='coerce').fillna(0)
-            p_c_agg = p_career.groupby(['球隊', '投手姓名']).sum(numeric_only=True).reset_index()
-            for _, r in p_c_agg.iterrows():
+        if not df_p_clean.empty:
+            for _, r in df_p_clean.groupby(['球隊', '投手姓名']).sum(numeric_only=True).reset_index().iterrows():
                 name = f"[{r['球隊']}] {r['投手姓名']}"
                 add_milestone('⚾ 生涯勝投', name, r['勝'], [5, 10, 20, 30, 50])
                 add_milestone('🌪️ 生涯三振', name, r['奪三振'], [10, 30, 50, 100, 150])
@@ -5425,57 +5575,35 @@ with tab5:
         else: st.success("目前全聯盟距離下一個里程碑都還有一段距離。")
 
     with t_streaks:
-        st.subheader("💎 神聖領域 (No-Hitters & Perfect Games)")
+        st.subheader("💎 神聖與史詩連續紀錄 (Streaks Portal)")
         
-        def safe_sum_pg(df_sub, col):
-            if col in df_sub.columns:
-                return pd.to_numeric(df_sub[col], errors='coerce').fillna(0).sum()
-            return 0
-            
         perfect_games, no_hitters, combined_pgs, combined_nohos = [], [], [], []
-        
-        if not df_p_full.empty:
-            for stage, g_stage in df_p_full.groupby('賽事階段', sort=False):
+        if not df_p_clean.empty:
+            for stage, g_stage in df_p_clean.groupby('賽事階段', sort=False):
                 for team, g_team in g_stage.groupby('球隊', sort=False):
                     g_t = g_team.sort_values('時間戳記')
-                    
-                    outs = safe_sum_pg(g_t, '局數(整數)') * 3 + safe_sum_pg(g_t, '局數(出局數)')
-                    tot_hits = safe_sum_pg(g_t, '被安打')
-                    tot_bb = safe_sum_pg(g_t, '四壞球')
-                    tot_runs = safe_sum_pg(g_t, '失分')
-                    
-                    if outs >= 9 and tot_hits == 0:
+                    outs = g_t['局數(整數)'].sum()*3 + g_t['局數(出局數)'].sum()
+                    if outs >= 9 and g_t['被安打'].sum() == 0:
                         p_list = []
-                        for idx, r in g_t.iterrows():
-                            o_int = pd.to_numeric(r.get('局數(整數)', 0), errors='coerce') if '局數(整數)' in r else 0
-                            o_dec = pd.to_numeric(r.get('局數(出局數)', 0), errors='coerce') if '局數(出局數)' in r else 0
-                            o_int = 0 if pd.isna(o_int) else o_int
-                            o_dec = 0 if pd.isna(o_dec) else o_dec
-                            
-                            o = o_int * 3 + o_dec
-                            if o > 0: 
-                                p_list.append(f"{r['投手姓名']} ({int(o//3)}.{int(o%3)} 局)")
-                        if not p_list: 
-                            continue
-                        p_str = " ➔ ".join(p_list)
+                        for _, r in g_t.iterrows():
+                            o = r['局數(整數)']*3 + r['局數(出局數)']
+                            if o > 0: p_list.append(f"{r['投手姓名']} ({int(o//3)}.{int(o%3)}局)")
+                        if not p_list: continue
                         
-                        stg_clean = str(stage)
-                        rec_str = f"**[{team}]** {p_str}  \n*(於 {stg_clean} 達成)*"
-                        
-                        is_pg = (tot_bb == 0 and tot_runs == 0)
-                        is_comb = len(g_t['投手姓名'].unique()) > 1
-                        if is_pg and is_comb: combined_pgs.append(rec_str)
-                        elif is_pg and not is_comb: perfect_games.append(rec_str)
-                        elif not is_pg and is_comb: combined_nohos.append(rec_str)
-                        elif not is_pg and not is_comb: no_hitters.append(rec_str)
+                        rec_str = f"**[{team}]** {' ➔ '.join(p_list)} *(於 {str(stage).strip()} 達成)*"
+                        tot_bb, tot_runs = g_t['四壞球'].sum(), g_t['失分'].sum()
+                        if tot_bb == 0 and tot_runs == 0:
+                            if len(g_t['投手姓名'].unique()) > 1: combined_pgs.append(rec_str)
+                            else: perfect_games.append(rec_str)
+                        else:
+                            if len(g_t['投手姓名'].unique()) > 1: combined_nohos.append(rec_str)
+                            else: no_hitters.append(rec_str)
 
         def display_shrine(title, records, icon):
             st.markdown(f"#### {title}")
-            if not records: 
-                st.caption("📌 尚無人達成此神聖領域")
+            if not records: st.caption("📌 尚無人達成此神聖領域")
             else:
-                for r in records: 
-                    st.markdown(f"{icon} {r}")
+                for r in records: st.markdown(f"{icon} {r}")
             st.divider()
 
         display_shrine("🌟 完全比賽 (Perfect Game)", perfect_games, "🏆")
@@ -5485,482 +5613,276 @@ with tab5:
 
         st.subheader("🔥 史詩連續紀錄 (Streaks)")
         
-        def display_record(title, top3_all, top3_curr, unit="場"):
-            st.markdown(f"#### {title}")
-            c1, c2 = st.columns(2)
-            with c1:
-                st.markdown(f"**🥇 歷史最高 (Top 3)**")
-                if not top3_all: 
-                    st.caption("📌 無")
-                else:
-                    for i, t in enumerate(top3_all):
-                        medal = "🥇" if i == 0 else "🥈" if i == 1 else "🥉"
-                        st.markdown(f"**{medal} {t['val']} {unit}**")
-                        for n in t['holders'][:3]: st.caption(f" 📌 {n}")
-                        if len(t['holders']) > 3:
-                            st.caption(f" 💬 *...以及其餘 {len(t['holders'])-3} 位並列保持者*")
-            with c2:
-                st.markdown(f"**📍 本季最高 (Top 3)**")
-                if not top3_curr: 
-                    st.caption("📌 無")
-                else:
-                    for i, t in enumerate(top3_curr):
-                        medal = "🥇" if i == 0 else "🥈" if i == 1 else "🥉"
-                        st.markdown(f"**{medal} {t['val']} {unit}**")
-                        for n in t['holders'][:3]: st.caption(f" 📌 {n}")
-                        if len(t['holders']) > 3:
-                            st.caption(f" 💬 *...以及其餘 {len(t['holders'])-3} 位並列保持者*")
-            st.divider()
-
-        def get_streak_record_exact(df, streak_type, loc_filter=None):
-            if df.empty: 
-                return []
-                
+        def display_streak_clean(title, df, streak_type, loc_filter=None, unit="場"):
+            if df.empty: return
             records = []
-            if streak_type in ['win', 'loss']:
+            
+            latest_stg = {}
+            if streak_type in ['win', 'loss', 'team_hr', 'team_hrless'] and '球隊' in df.columns:
+                for t in df['球隊'].unique():
+                    t_df = df[df['球隊'] == t]
+                    if not t_df.empty: latest_stg[t] = t_df.sort_values('時間戳記').iloc[-1]['賽事階段']
+            elif streak_type in ['hit', 'hr', 'hitless', 'hrless'] and '球員姓名' in df.columns:
+                for n in df['球員姓名'].unique():
+                    p_df = df[df['球員姓名'] == n]
+                    if not p_df.empty: latest_stg[n] = p_df.sort_values('時間戳記').iloc[-1]['賽事階段']
+            elif streak_type.startswith('zero_run') and '投手姓名' in df.columns:
+                for n in df['投手姓名'].unique():
+                    p_df = df[df['投手姓名'] == n]
+                    if not p_df.empty: latest_stg[n] = p_df.sort_values('時間戳記').iloc[-1]['賽事階段']
+
+            if streak_type in ['win', 'loss', 'team_hr', 'team_hrless']:
                 for (team, stage), g in df.groupby(['球隊', '賽事階段'], sort=False):
                     ts = g['時間戳記'].min()
-                    if streak_type == 'win': 
-                        cond = any('勝' in str(x) for x in g.get('勝敗', []))
-                    else: 
-                        cond = any('敗' in str(x) for x in g.get('勝敗', []))
+                    if streak_type == 'win': cond = g['勝'].sum() > 0
+                    elif streak_type == 'loss': cond = g['敗'].sum() > 0
+                    elif streak_type == 'team_hr': cond = g['全壘打'].sum() > 0 if '全壘打' in g.columns else False
+                    elif streak_type == 'team_hrless': cond = g['全壘打'].sum() == 0 if '全壘打' in g.columns else True
                     records.append({'keys': team, 'stage': stage, 'ts': ts, 'cond': cond})
-                    
-            elif streak_type in ['hit', 'hr', 'hitless']:
+            elif streak_type in ['hit', 'hr', 'hitless', 'hrless']:
                 for (team, name, stage), g in df.groupby(['球隊', '球員姓名', '賽事階段'], sort=False):
                     ts = g['時間戳記'].min()
-                    hit_v = pd.to_numeric(g.get('安打', 0), errors='coerce').fillna(0).sum()
-                    hr_v = pd.to_numeric(g.get('全壘打', 0), errors='coerce').fillna(0).sum()
-                    ab_v = pd.to_numeric(g.get('打數', 0), errors='coerce').fillna(0).sum()
+                    hit_v = g['安打'].sum()
+                    hr_v = g['全壘打'].sum()
+                    pa_v = g['打席'].sum()
                     if streak_type == 'hit': cond = hit_v > 0
                     elif streak_type == 'hr': cond = hr_v > 0
-                    elif streak_type == 'hitless': cond = (ab_v > 0 and hit_v == 0)
+                    elif streak_type == 'hitless': cond = (pa_v > 0 and hit_v == 0)
+                    elif streak_type == 'hrless': cond = (pa_v > 0 and hr_v == 0)
                     records.append({'keys': (team, name), 'stage': stage, 'ts': ts, 'cond': cond})
-                    
-            elif streak_type in ['team_hit', 'team_hr']:
-                for (team, stage), g in df.groupby(['球隊', '賽事階段'], sort=False):
-                    ts = g['時間戳記'].min()
-                    if streak_type == 'team_hit':
-                        val = pd.to_numeric(g.get('安打', 0), errors='coerce').fillna(0).sum()
-                    else:
-                        val = pd.to_numeric(g.get('全壘打', 0), errors='coerce').fillna(0).sum()
-                    records.append({'keys': team, 'stage': stage, 'ts': ts, 'cond': val > 0})
-                    
-            elif streak_type.startswith('zero_run') or streak_type == 'hr_allowed':
+            elif streak_type.startswith('zero_run'):
                 for (team, stage), g_stage in df.groupby(['球隊', '賽事階段'], sort=False):
                     g_stage = g_stage.sort_values('時間戳記')
                     for i, (_, r) in enumerate(g_stage.iterrows()):
                         is_sp = (i == 0)
-                        if streak_type == 'zero_run_sp' and not is_sp: 
-                            continue
-                        if streak_type == 'zero_run_rp' and is_sp: 
-                            continue
+                        if streak_type == 'zero_run_sp' and not is_sp: continue
+                        if streak_type == 'zero_run_rp' and is_sp: continue
                         ts = r.get('時間戳記', 0)
                         name = r.get('投手姓名', '')
-                        if streak_type.startswith('zero_run'):
-                            r_runs = pd.to_numeric(r.get('失分', 0), errors='coerce')
-                            ip_out = pd.to_numeric(r.get('局數(整數)', 0), errors='coerce') * 3 + pd.to_numeric(r.get('局數(出局數)', 0), errors='coerce')
-                            cond = (r_runs == 0 and ip_out > 0)
-                        else:
-                            hr_a = pd.to_numeric(r.get('被全壘打', 0), errors='coerce')
-                            cond = hr_a > 0
+                        r_runs = r.get('失分', 0)
+                        ip_out = r.get('局數(整數)', 0) * 3 + r.get('局數(出局數)', 0)
+                        cond = (r_runs == 0 and ip_out > 0)
                         records.append({'keys': (team, name), 'stage': stage, 'ts': ts, 'cond': cond})
                         
-            if not records: 
-                return []
-                
-            seq_df = pd.DataFrame(records).sort_values('ts')
-            if loc_filter:
+            seq_df = pd.DataFrame(records).sort_values('ts') if records else pd.DataFrame()
+            if loc_filter and not seq_df.empty:
                 filtered = []
                 for _, r in seq_df.iterrows():
-                    team = r['keys'][0] if isinstance(r['keys'], tuple) else r['keys']
-                    h_team = global_home_dict.get(str(r['stage']), "Unknown")
-                    if loc_filter == 'home' and team == h_team: 
-                        filtered.append(r)
-                    elif loc_filter == 'away' and team != h_team: 
-                        filtered.append(r)
+                    team_k = r['keys'][0] if isinstance(r['keys'], tuple) else r['keys']
+                    hm_tm = get_home_team_tab5(str(r['stage']))
+                    if loc_filter == 'home' and team_k == hm_tm: filtered.append(r)
+                    elif loc_filter == 'away' and team_k != hm_tm and hm_tm != 'Unknown': filtered.append(r)
                 seq_df = pd.DataFrame(filtered)
-                if seq_df.empty: 
-                    return []
-                    
+                
             all_streaks = []
-            for k, group in seq_df.groupby('keys', sort=False):
-                curr_streak = 0
-                st_stage = ""
-                for _, r in group.iterrows():
-                    if r['cond']:
-                        if curr_streak == 0: 
-                            st_stage = r['stage']
-                        curr_streak += 1
-                        ed_stage = r['stage']
-                        ed_ts = r['ts']
-                    else:
-                        if curr_streak > 0:
-                            all_streaks.append({'keys': k, 'streak': curr_streak, 'start': st_stage, 'end': ed_stage, 'end_ts': ed_ts})
-                        curr_streak = 0
-                if curr_streak > 0:
-                    all_streaks.append({'keys': k, 'streak': curr_streak, 'start': st_stage, 'end': ed_stage, 'end_ts': ed_ts})
-                        
-            if not all_streaks: 
-                return []
-                
-            streak_groups = {}
-            for s in all_streaks:
-                slen = s['streak']
-                if slen not in streak_groups: streak_groups[slen] = []
-                k = s['keys']
-                
-                st_clean = str(s['start'])
-                ed_clean = str(s['end'])
-                span_str = f"({st_clean} ~ {ed_clean})" if st_clean != ed_clean else f"({st_clean})"
-                
-                last_ts_in_filter = seq_df[seq_df['keys'] == k]['ts'].max()
-                is_ongoing = (s['end_ts'] >= last_ts_in_filter) and (f"[S{max_season}]" in s['end'])
-                ongoing_str = " 🔥(延續中)" if is_ongoing else ""
-                
-                if isinstance(k, tuple): 
-                    name_str = f"[{k[0]}] {k[1]}"
-                else: 
-                    name_str = str(k)
-                    
-                streak_groups[slen].append(f"{name_str} {span_str}{ongoing_str}")
-                
-            sorted_lengths = sorted(streak_groups.keys(), reverse=True)
-            top3 = []
-            for slen in sorted_lengths[:3]:
-                unique_holders = list(dict.fromkeys(streak_groups[slen]))
-                top3.append({'val': slen, 'holders': unique_holders})
-                
-            return top3
+            if not seq_df.empty:
+                for k, group in seq_df.groupby('keys', sort=False):
+                    curr_streak, st_stage, ed_stage = 0, "", ""
+                    k_entity = k[1] if isinstance(k, tuple) else k
+                    for _, r in group.iterrows():
+                        if r['cond']:
+                            if curr_streak == 0: st_stage = r['stage']
+                            curr_streak += 1
+                            ed_stage = r['stage']
+                        else:
+                            if curr_streak > 0: 
+                                all_streaks.append({'keys': k, 'streak': curr_streak, 'start': st_stage, 'end': ed_stage, 'is_active': False})
+                            curr_streak = 0
+                    if curr_streak > 0: 
+                        all_streaks.append({'keys': k, 'streak': curr_streak, 'start': st_stage, 'end': ed_stage, 'is_active': (ed_stage == latest_stg.get(k_entity))})
 
-        df_b_curr = df_b_full[df_b_full['賽事階段'].astype(str).str.contains(curr_s_prefix, regex=False)] if not df_b_full.empty else pd.DataFrame()
-        df_p_curr = df_p_full[df_p_full['賽事階段'].astype(str).str.contains(curr_s_prefix, regex=False)] if not df_p_full.empty else pd.DataFrame()
-        
-        w_all = get_streak_record_exact(df_p_full, 'win')
-        w_curr = get_streak_record_exact(df_p_curr, 'win')
-        display_record("🔥 聯盟最長連勝", w_all, w_curr)
-        
-        hw_all = get_streak_record_exact(df_p_full, 'win', loc_filter='home')
-        hw_curr = get_streak_record_exact(df_p_curr, 'win', loc_filter='home')
-        display_record("🏠 最長主場連勝", hw_all, hw_curr)
-        
-        aw_all = get_streak_record_exact(df_p_full, 'win', loc_filter='away')
-        aw_curr = get_streak_record_exact(df_p_curr, 'win', loc_filter='away')
-        display_record("✈️ 最長客場連勝", aw_all, aw_curr)
-        
-        l_all = get_streak_record_exact(df_p_full, 'loss')
-        l_curr = get_streak_record_exact(df_p_curr, 'loss')
-        display_record("🥶 聯盟最長連敗 (黑暗期)", l_all, l_curr)
-        
-        th_all = get_streak_record_exact(df_b_full, 'team_hit')
-        th_curr = get_streak_record_exact(df_b_curr, 'team_hit')
-        display_record("⚾ 球隊最長連續場次安打", th_all, th_curr)
-        
-        thr_all = get_streak_record_exact(df_b_full, 'team_hr')
-        thr_curr = get_streak_record_exact(df_b_curr, 'team_hr')
-        display_record("🚀 球隊最長連續場次全壘打", thr_all, thr_curr)
-        
-        h_all = get_streak_record_exact(df_b_full, 'hit')
-        h_curr = get_streak_record_exact(df_b_curr, 'hit')
-        display_record("🏏 球員最長連續場次安打", h_all, h_curr)
-        
-        hr_all = get_streak_record_exact(df_b_full, 'hr')
-        hr_curr = get_streak_record_exact(df_b_curr, 'hr')
-        display_record("🚀 球員最長連續場次全壘打", hr_all, hr_curr)
-        
-        zsp_all = get_streak_record_exact(df_p_full, 'zero_run_sp')
-        zsp_curr = get_streak_record_exact(df_p_curr, 'zero_run_sp')
-        display_record("🛡️ 先發投手連續出賽無失分", zsp_all, zsp_curr)
-        
-        zrp_all = get_streak_record_exact(df_p_full, 'zero_run_rp')
-        zrp_curr = get_streak_record_exact(df_p_curr, 'zero_run_rp')
-        display_record("🔒 牛棚後援連續出賽無失分", zrp_all, zrp_curr)
+            def format_streak(s):
+                stg1 = str(s['start']).strip()
+                stg2 = str(s['end']).strip()
+                span = f"({stg1} ~ {stg2})" if stg1 != stg2 else f"({stg1})"
+                name_str = f"[{s['keys'][0]}] {s['keys'][1]}" if isinstance(s['keys'], tuple) else str(s['keys'])
+                return f"{name_str} {span}"
+
+            hist_top, act_top = [], []
+            if all_streaks:
+                max_all = max(s['streak'] for s in all_streaks)
+                if max_all > 0:
+                    hist_top = [{'val': max_all, 'holders': list(dict.fromkeys([format_streak(s) for s in all_streaks if s['streak'] == max_all]))}]
+                
+                active_streaks = [s for s in all_streaks if s['is_active']]
+                if active_streaks:
+                    max_act = max(s['streak'] for s in active_streaks)
+                    if max_act > 0:
+                        act_top = [{'val': max_act, 'holders': list(dict.fromkeys([format_streak(s) for s in active_streaks if s['streak'] == max_act]))}]
+
+            st.markdown(f"##### {title}")
+            c1, c2 = st.columns(2)
+            with c1:
+                if hist_top:
+                    st.markdown(f"**🥇 歷史最高：{hist_top[0]['val']} {unit}**")
+                    holders = hist_top[0]['holders']
+                    for n in holders[:2]: st.caption(f" 📌 {n}")
+                    if len(holders) > 2:
+                        with st.expander(f"查看其餘 {len(holders)-2} 筆並列"):
+                            for n in holders[2:]: st.caption(f" 📌 {n}")
+                else: st.caption(" 📌 無紀錄")
+            with c2:
+                if act_top:
+                    st.markdown(f"**🔥 目前持續中：{act_top[0]['val']} {unit}**")
+                    holders = act_top[0]['holders']
+                    for n in holders[:2]: st.caption(f" 📌 {n}")
+                    if len(holders) > 2:
+                        with st.expander(f"查看其餘 {len(holders)-2} 筆並列"):
+                            for n in holders[2:]: st.caption(f" 📌 {n}")
+                else: st.caption(" 📌 無持續中紀錄")
+            st.markdown("<br>", unsafe_allow_html=True)
+
+        with st.container(border=True):
+            st.markdown("#### 🏁 團隊與勝敗連續紀錄")
+            display_streak_clean("🔴🔵 聯盟最長連勝場次", df_p_clean, 'win')
+            display_streak_clean("🏠 城堡壁壘：最長主場連勝", df_p_clean, 'win', 'home')
+            display_streak_clean("✈️ 征服者：最長客場連勝", df_p_clean, 'win', 'away')
+            display_streak_clean("🥶 冰封期：最長連續連敗", df_p_clean, 'loss')
+            display_streak_clean("🚀 團隊連續場次全壘打", df_b_clean, 'team_hr')
+            display_streak_clean("🏜️ 團隊連續場次無全壘打", df_b_clean, 'team_hrless')
+
+        st.markdown("<br>", unsafe_allow_html=True)
+        with st.container(border=True):
+            st.markdown("#### 🚀 史詩火力與投手連續大榜")
+            display_streak_clean("🏏 球員最長連續場次安打", df_b_clean, 'hit')
+            display_streak_clean("🕳️ 球員最長連續無安打場次", df_b_clean, 'hitless')
+            display_streak_clean("🚀 球員最長連續場次全壘打", df_b_clean, 'hr')
+            display_streak_clean("⏳ 球員最長連續無全壘打場次", df_b_clean, 'hrless')
+            display_streak_clean("🛡️ 先發投手連續出賽無失分", df_p_clean, 'zero_run_sp')
+            display_streak_clean("🔒 牛棚後援連續出賽無失分", df_p_clean, 'zero_run_rp')
 
     with t_extremes:
         st.subheader("🤯 聯盟單場極端紀錄與進階大數據榜 (Extremes & Sabermetrics)")
         st.markdown("### ⚖️ 歷史運氣與進階數據極端榜")
-        st.caption("透過 BABIP 與 FIP 窺探球員的真實命運！誰是天選之人？誰又是地獄倒楣鬼？(※ 需達一定生涯打席/局數門檻)")
         min_career_pa = max_season * 3.0
         min_career_ip = max_season * 1.0
 
         c_ext1, c_ext2 = st.columns(2)
         with c_ext1:
-            st.markdown("#### 🎰 運氣天平與趣味紀錄")
+            st.markdown("#### 🎰 運氣天平與開轟里程碑")
             b_saber_qual = b_saber[b_saber['打席'] >= min_career_pa].copy()
             if not b_saber_qual.empty:
                 b_saber_qual['BABIP'] = (b_saber_qual['安打'] - b_saber_qual['全壘打']) / (b_saber_qual['打數'] - b_saber_qual['三振'] - b_saber_qual['全壘打']).replace(0, 1)
-                lucky = b_saber_qual.sort_values('BABIP', ascending=False).iloc[0]
-                st.metric("🍀 天選之人 (生涯最高 BABIP)", f"{lucky['BABIP']:.3f}", f"[{lucky['球隊']}] {lucky['球員姓名']}")
-                unlucky = b_saber_qual.sort_values('BABIP', ascending=True).iloc[0]
-                st.metric("🐈‍⬛ 地獄倒楣鬼 (生涯最低 BABIP)", f"{unlucky['BABIP']:.3f}", f"[{unlucky['球隊']}] {unlucky['球員姓名']}")
+                st.metric("🍀 天選之人 (生涯最高 BABIP)", f"{b_saber_qual['BABIP'].max():.3f}", f"[{b_saber_qual.loc[b_saber_qual['BABIP'].idxmax()]['球隊']}] {b_saber_qual.loc[b_saber_qual['BABIP'].idxmax()]['球員姓名']}")
+                st.metric("🐈‍⬛ 地獄倒楣鬼 (生涯最低 BABIP)", f"{b_saber_qual['BABIP'].min():.3f}", f"[{b_saber_qual.loc[b_saber_qual['BABIP'].idxmin()]['球隊']}] {b_saber_qual.loc[b_saber_qual['BABIP'].idxmin()]['球員姓名']}")
                 
-                b_saber_qual['TTO'] = (b_saber_qual['全壘打'] + b_saber_qual['三振'] + b_saber_qual['四壞球']) / b_saber_qual['打席'].replace(0, 1) * 100
-                tto_king = b_saber_qual.sort_values('TTO', ascending=False).iloc[0]
-                st.metric("🎲 一翻兩瞪眼 (生涯最高 TTO%)", f"{tto_king['TTO']:.1f}%", f"[{tto_king['球隊']}] {tto_king['球員姓名']}", help="直接靠全壘打、保送或三振定生死！")
-                
+                st.markdown("---")
+                st.markdown("##### ⏳ 鐵血苦行僧 (生涯最難開轟 Top 3)")
                 b_saber_qual['HR_Rate'] = b_saber_qual['全壘打'] / b_saber_qual['打席']
-                top_droughts = b_saber_qual.sort_values(by=['HR_Rate', '打席'], ascending=[True, False]).head(3)
+                kings = b_saber_qual.sort_values(by=['HR_Rate', '打席'], ascending=[True, False]).head(3)
+                for i, (_, king) in enumerate(kings.iterrows()):
+                    st.caption(f"{['🥇','🥈','🥉'][i]} [{king['球隊']}] {king['球員姓名']}：{int(king['打席'])} 打席 / {int(king['全壘打'])}轟")
                 
-                king = top_droughts.iloc[0]
-                king_ratio_str = "0 轟" if king['全壘打'] == 0 else f"{int(king['全壘打'])} 轟 (平均 {king['打席']/king['全壘打']:.1f} 打席/轟)"
-                st.metric("⏳ 鐵血苦行僧 (生涯最難開轟)", f"{int(king['打席'])} 打席 / {king_ratio_str}", f"🥇 [{king['球隊']}] {king['球員姓名']}", help="累積大量打席卻擠不出一發全壘打，或開轟所需打席數最高的純盲槍客紀錄！")
+                first_hr_records, longest_hr_intervals = [], []
+                if not df_b_clean.empty:
+                    df_b_sorted = df_b_clean.sort_values('時間戳記').copy()
+                    for name, g_df in df_b_sorted.groupby(['球隊', '球員姓名']):
+                        cum_pa, has_hr, hr_positions = 0, False, []
+                        p_team, p_name = name[0], name[1]
+                        for _, row in g_df.iterrows():
+                            pa_val = row.get('打席', 0)
+                            if pa_val == 0: continue
+                            cum_pa += pa_val
+                            if row.get('全壘打', 0) > 0:
+                                stg_str = str(row['賽事階段']).strip()
+                                if not has_hr:
+                                    first_hr_records.append({'player': f"[{p_team}] {p_name}", 'pa': cum_pa, 'stage': stg_str})
+                                    has_hr = True
+                                hr_positions.append({'pa': cum_pa, 'stage': stg_str})
+                        if len(hr_positions) >= 2:
+                            for idx in range(len(hr_positions)-1):
+                                gap = hr_positions[idx+1]['pa'] - hr_positions[idx]['pa']
+                                longest_hr_intervals.append({'player': f"[{p_team}] {p_name}", 'gap': gap, 'stg1': hr_positions[idx]['stage'], 'stg2': hr_positions[idx+1]['stage']})
                 
-                if len(top_droughts) > 1:
-                    sub_text = ""
-                    for i in range(1, len(top_droughts)):
-                        row = top_droughts.iloc[i]
-                        medal = "🥈" if i == 1 else "🥉"
-                        ratio_str = "0 轟" if row['全壘打'] == 0 else f"{int(row['全壘打'])} 轟 (平均 {row['打席']/row['全壘打']:.1f} 打席/轟)"
-                        sub_text += f"{medal} [{row['球隊']}] {row['球員姓名']} ({int(row['打席'])} 打席 / {ratio_str})  \n"
-                    st.caption(sub_text)
-            else: 
-                st.info("尚無球員達生涯打席門檻。")
+                st.markdown("---")
+                st.markdown("##### ⏱️ 生涯首轟所需打席極值 (最快/最慢)")
+                if first_hr_records:
+                    df_first = pd.DataFrame(first_hr_records)
+                    st.caption("🚀 **最快開轟 Top 3**：")
+                    for i, r in df_first.sort_values('pa', ascending=True).head(3).reset_index().iterrows(): st.caption(f" {i+1}. {r['player']}：僅歷經 **{int(r['pa'])}** 打席 (於 {r['stage']})")
+                    st.caption("🐢 **最慢大智若愚開轟 Top 3**：")
+                    for i, r in df_first.sort_values('pa', ascending=False).head(3).reset_index().iterrows(): st.caption(f" {i+1}. {r['player']}：熬了 **{int(r['pa'])}** 打席才首轟 (於 {r['stage']})")
                 
+                st.markdown("##### 🌋 兩轟之間相隔最久打席 Top 3")
+                if longest_hr_intervals:
+                    df_gap = pd.DataFrame(longest_hr_intervals).sort_values('gap', ascending=False).head(3)
+                    for i, r in df_gap.reset_index().iterrows(): 
+                        st.caption(f" {['🥇','🥈','🥉'][i]} {r['player']}：乾涸了 **{int(r['gap'])}** 打席")
+                        st.caption(f"  └ (從 {r['stg1']} ➔ {r['stg2']})")
         with c_ext2:
-            st.markdown("#### 🛡️ 真金不怕火煉 (FIP-ERA 差距)")
+            st.markdown("#### 🛡️ 真金不怕火煉 (投手丘數據與苦勞)")
             p_saber_qual = p_saber[p_saber['局數'] >= min_career_ip].copy()
             if not p_saber_qual.empty:
                 p_saber_qual['ERA'] = (p_saber_qual['自責分'] * 9) / p_saber_qual['局數'].replace(0, 1)
                 p_saber_qual['FIP'] = (((13*p_saber_qual['被全壘打'])+(3*p_saber_qual['四壞球'])-(2*p_saber_qual['奪三振']))/p_saber_qual['局數'].replace(0, 1)) + 3.10
                 p_saber_qual['DIFF'] = p_saber_qual['FIP'] - p_saber_qual['ERA']
                 real_deal = p_saber_qual.sort_values('DIFF', ascending=True).iloc[0]
-                st.metric("💡 悲情實力派 (FIP 遠低於 ERA)", f"FIP {real_deal['FIP']:.2f} (ERA {real_deal['ERA']:.2f})", f"[{real_deal['球隊']}] {real_deal['投手姓名']}", help="獨立防禦率極低，代表他的失分幾乎都是隊友守備雷的非戰之罪！")
                 mirage = p_saber_qual.sort_values('DIFF', ascending=False).iloc[0]
-                st.metric("🎰 強運幻象 (ERA 遠低於 FIP)", f"ERA {mirage['ERA']:.2f} (FIP {mirage['FIP']:.2f})", f"[{mirage['球隊']}] {mirage['投手姓名']}", help="防禦率極漂亮，代表他極度依賴隊友的超神守備來度過難關！")
-            else: 
-                st.info("尚無投手達生涯局數門檻。")
                 
-            st.markdown("#### 🏃‍♂️ 投手苦勞與趣味紀錄")
-            if not p_saber.empty:
-                thankless = p_saber[(p_saber['勝'] == 0) & (p_saber['救援'] == 0) & (p_saber['中繼'] == 0)]
-                if not thankless.empty:
-                    thankless_top = thankless.sort_values('局數', ascending=False).head(3)
-                    king_t = thankless_top.iloc[0]
-                    outs_t = int(king_t['局數'] * 3)
-                    ip_disp_t = (outs_t // 3) + (outs_t % 3) / 10.0
-                    st.metric("💦 純做白工 (最多局數 0勝0中繼0救援)", f"{ip_disp_t} 局", f"🥇 [{king_t['球隊']}] {king_t['投手姓名']}", help="投了最多局數，卻完全與勝投、中繼、救援無緣的悲情勞碌命！")
-                    if len(thankless_top) > 1:
-                        sub_text_t = ""
-                        for i in range(1, len(thankless_top)):
-                            row = thankless_top.iloc[i]
-                            outs_r = int(row['局數'] * 3)
-                            ip_disp_r = (outs_r // 3) + (outs_r % 3) / 10.0
-                            medal = "🥈" if i == 1 else "🥉"
-                            sub_text_t += f"{medal} [{row['球隊']}] {row['投手姓名']} ({ip_disp_r} 局)  \n"
-                        st.caption(sub_text_t)
-                else:
-                    st.info("目前無人達成純做白工條件。")
-
-                no_k = p_saber[p_saber['奪三振'] == 0]
-                if not no_k.empty:
-                    no_k_top = no_k.sort_values('局數', ascending=False).head(3)
-                    king_k = no_k_top.iloc[0]
-                    outs_k = int(king_k['局數'] * 3)
-                    ip_disp_k = (outs_k // 3) + (outs_k % 3) / 10.0
-                    st.metric("🤖 絕對發球機 (最多局數 0 三振)", f"{ip_disp_k} 局", f"🥇 [{king_k['球隊']}] {king_k['投手姓名']}", help="投了最多局，卻連一次三振都拿不到的極致發球機！")
-                    if len(no_k_top) > 1:
-                        sub_text_k = ""
-                        for i in range(1, len(no_k_top)):
-                            row = no_k_top.iloc[i]
-                            outs_r = int(row['局數'] * 3)
-                            ip_disp_r = (outs_r // 3) + (outs_r % 3) / 10.0
-                            medal = "🥈" if i == 1 else "🥉"
-                            sub_text_k += f"{medal} [{row['球隊']}] {row['投手姓名']} ({ip_disp_r} 局)  \n"
-                        st.caption(sub_text_k)
-                else:
-                    st.info("目前全聯盟投手皆有三振紀錄。")
-            else:
-                st.info("尚無投手資料。")
-
-        st.divider()
-
-        st.markdown("### 🎢 單場 WAR 值暴衝與狂扣紀錄 (Game of a Lifetime / Disaster)")
-        st.caption("由於系統目前採計 Box Score，我們以「單場 eWAR 絕對值」取代傳統的 WPA (勝率提升值)。找出單場爆發力最強與崩盤最慘的表現！")
-        
-        game_war_records = []
-        pos_adj_dict = {"C": 0.15, "SS": 0.12, "2B": 0.05, "3B": 0.05, "CF": 0.05, "LF": 0.00, "RF": 0.00, "1B": -0.05, "DH": -0.12, "PH": -0.12, "PR": -0.12}
-
-        if not df_b_full.empty:
-            for _, r in df_b_full.iterrows():
-                pa = pd.to_numeric(r.get('打席', 0), errors='coerce')
-                if pd.isna(pa) or pa == 0: continue
-                
-                stats_vals = []
-                for col in ['打數', '安打', '二壘安打', '三壘安打', '全壘打', '打點', '得分', '四壞球', '三振']:
-                    val = pd.to_numeric(r.get(col, 0), errors='coerce')
-                    stats_vals.append(0 if pd.isna(val) else val)
-                ab, h, h2, h3, hr, rbi, run, bb, so = stats_vals
-                
-                h1 = h - h2 - h3 - hr
-                lg_woba = 0.320
-                woba = (0.69*bb + 0.88*h1 + 1.25*h2 + 1.59*h3 + 2.06*hr) / pa
-                wrc_p = ((woba / lg_woba) - 1) * 200 + 100
-                pos = r.get('守位', 'DH')
-                e_war = (((wrc_p - 70) / 80) + pos_adj_dict.get(pos, -0.12)) * (pa / 15)
-                
-                game_war_records.append({
-                    'Type': 'Batter', 'Team': r['球隊'], 'Name': r['球員姓名'], 'Stage': str(r['賽事階段']),
-                    'WAR': e_war, 'Desc': f"{int(ab)}支{int(h)}, {int(hr)}轟, {int(rbi)}打點"
-                })
-
-        if not df_p_full.empty:
-            for _, r in df_p_full.iterrows():
-                o_int = pd.to_numeric(r.get('局數(整數)', 0), errors='coerce')
-                o_dec = pd.to_numeric(r.get('局數(出局數)', 0), errors='coerce')
-                if pd.isna(o_int) and pd.isna(o_dec): continue
-                ip = (0 if pd.isna(o_int) else o_int) + (0 if pd.isna(o_dec) else o_dec)/3.0
-                
-                stats_vals_p = []
-                for col in ['自責分', '被安打', '四壞球', '奪三振']:
-                    val = pd.to_numeric(r.get(col, 0), errors='coerce')
-                    stats_vals_p.append(0 if pd.isna(val) else val)
-                er, h_allowed, bb_allowed, k = stats_vals_p
-                hr = pd.to_numeric(r.get('被全壘打', 0), errors='coerce')
-                hr = 0 if pd.isna(hr) else hr
-                
-                if ip > 0:
-                    era = (er * 9) / ip
-                    fip = (((13*hr) + (3*bb_allowed) - (2*k)) / ip) + 3.10
-                    tra = (era + fip) / 2.0
-                    e_war = ((10.60 * 1.30 - tra) / 2.12) * (ip / 10)
-                else:
-                    e_war = -0.1*er - 0.05*bb_allowed
-                    
-                ip_disp = f"{int(ip)}.{int(round((ip % 1)*3))}"
-                game_war_records.append({
-                    'Type': 'Pitcher', 'Team': r['球隊'], 'Name': r['投手姓名'], 'Stage': str(r['賽事階段']),
-                    'WAR': e_war, 'Desc': f"{ip_disp}局, {int(k)}K, {int(er)}責失"
-                })
-
-        if game_war_records:
-            df_gwar = pd.DataFrame(game_war_records)
-            cg1, cg2 = st.columns(2)
-            with cg1:
-                st.markdown("**🔥 封神之戰 (單場最高 WAR)**")
-                b_best = df_gwar[df_gwar['Type'] == 'Batter'].sort_values('WAR', ascending=False)
-                if not b_best.empty:
-                    for i, r in b_best.head(2).iterrows(): st.caption(f"🏏 **{r['Name']}**: +{r['WAR']:.2f} WAR ({r['Stage']} | {r['Desc']})")
-                p_best = df_gwar[df_gwar['Type'] == 'Pitcher'].sort_values('WAR', ascending=False)
-                if not p_best.empty:
-                    for i, r in p_best.head(2).iterrows(): st.caption(f"⚾ **{r['Name']}**: +{r['WAR']:.2f} WAR ({r['Stage']} | {r['Desc']})")
-            
-            with cg2:
-                st.markdown("**🥶 毀滅性戰犯 (單場狂扣 WAR)**")
-                b_worst = df_gwar[df_gwar['Type'] == 'Batter'].sort_values('WAR', ascending=True)
-                if not b_worst.empty:
-                    for i, r in b_worst.head(2).iterrows(): st.caption(f"💣 **{r['Name']}**: {r['WAR']:.2f} WAR ({r['Stage']} | {r['Desc']})")
-                p_worst = df_gwar[df_gwar['Type'] == 'Pitcher'].sort_values('WAR', ascending=True)
-                if not p_worst.empty:
-                    for i, r in p_worst.head(2).iterrows(): st.caption(f"🧨 **{r['Name']}**: {r['WAR']:.2f} WAR ({r['Stage']} | {r['Desc']})")
-
-        st.divider()
-
-        st.markdown("### 🎰 畢氏定理強運與悲情球隊榜 (Pythagorean Luck)")
-        st.caption("畢氏期望值公式計算出球隊「理論上應該拿幾勝」，實際勝場減去預期勝場即為「運氣值」。")
-        
-        pyth_records = []
-        if not df_p_full.empty:
-            df_p_full['Season'] = df_p_full['賽事階段'].astype(str).str.extract(r'\[S(\d+)\]').fillna(1).astype(int)
-            for s in df_p_full['Season'].unique():
-                for team in ['LAA', 'LAD']:
-                    s_pref = f"[S{s}]"
-                    p_sub = df_p_full[(df_p_full['賽事階段'].astype(str).str.contains(s_pref, regex=False)) & (df_p_full['球隊'] == team)]
-                    if p_sub.empty: continue
-                    
-                    w = sum(1 for _, g in p_sub.groupby('賽事階段', sort=False) if any('勝' in str(x) for x in g['勝敗'].values))
-                    l = sum(1 for _, g in p_sub.groupby('賽事階段', sort=False) if any('敗' in str(x) for x in g['勝敗'].values))
-                    ra = pd.to_numeric(p_sub['失分'], errors='coerce').fillna(0).sum()
-                    
-                    rs = 0
-                    if not df_b_full.empty:
-                        b_sub = df_b_full[(df_b_full['賽事階段'].astype(str).str.contains(s_pref, regex=False)) & (df_b_full['球隊'] == team)]
-                        rs = pd.to_numeric(b_sub['得分'], errors='coerce').fillna(0).sum()
-                    
-                    g_played = p_sub['賽事階段'].nunique()
-                    if rs + ra > 0:
-                        exp_win_pct = (rs**1.83) / (rs**1.83 + ra**1.83)
-                    else: exp_win_pct = 0.5
-                    
-                    exp_wins = exp_win_pct * g_played
-                    luck = w - exp_wins
-                    
-                    pyth_records.append({
-                        'Team_Season': f"[{team}] Season {s}", 'W': w, 'L': l, 'RS': int(rs), 'RA': int(ra),
-                        'Exp_W': exp_wins, 'Luck': luck
-                    })
-        
-        if pyth_records:
-            df_pyth = pd.DataFrame(pyth_records)
-            luckiest = df_pyth.sort_values('Luck', ascending=False).iloc[0]
-            unluckiest = df_pyth.sort_values('Luck', ascending=True).iloc[0]
-            
-            cp1, cp2 = st.columns(2)
-            cp1.metric("🍀 歷史最強運球隊 (被棒球之神眷顧)", f"{luckiest['Team_Season']}", f"+{luckiest['Luck']:.1f} 勝 (實際 {luckiest['W']}勝 / 預期 {luckiest['Exp_W']:.1f}勝)")
-            cp1.caption(f"*(得失分: {luckiest['RS']} - {luckiest['RA']})*")
-            
-            cp2.metric("⛈️ 歷史最悲情球隊 (連喝水都會塞牙縫)", f"{unluckiest['Team_Season']}", f"{unluckiest['Luck']:.1f} 勝 (實際 {unluckiest['W']}勝 / 預期 {unluckiest['Exp_W']:.1f}勝)")
-            cp2.caption(f"*(得失分: {unluckiest['RS']} - {unluckiest['RA']})*")
+                st.markdown(f"**💡 悲情實力派 (FIP < ERA)**: [{real_deal['球隊']}] **{real_deal['投手姓名']}**")
+                st.caption(f"► FIP: **{real_deal['FIP']:.2f}** ｜ ERA: {real_deal['ERA']:.2f} (落差 {abs(real_deal['DIFF']):.2f})")
+                st.markdown("<br>", unsafe_allow_html=True)
+                st.markdown(f"**🎰 強運幻象 (ERA < FIP)**: [{mirage['球隊']}] **{mirage['投手姓名']}**")
+                st.caption(f"► ERA: **{mirage['ERA']:.2f}** ｜ FIP: {mirage['FIP']:.2f} (落差 {abs(mirage['DIFF']):.2f})")
 
         st.divider()
 
         st.markdown("### 🎭 判若兩人 (Splits Extremes)")
         st.caption("主客場表現落差最大、以及例行賽與世界大賽表現落差最大的球員排行榜 (需雙邊皆達 10 打席 / 5 局投球)。")
-
+        
         def calc_ops_loop(df_sub):
-            pa = pd.to_numeric(df_sub.get('打席', 0), errors='coerce').fillna(0).sum()
-            ab = pd.to_numeric(df_sub.get('打數', 0), errors='coerce').fillna(0).sum()
-            h = pd.to_numeric(df_sub.get('安打', 0), errors='coerce').fillna(0).sum()
-            h2 = pd.to_numeric(df_sub.get('二壘安打', 0), errors='coerce').fillna(0).sum()
-            h3 = pd.to_numeric(df_sub.get('三壘安打', 0), errors='coerce').fillna(0).sum()
-            hr = pd.to_numeric(df_sub.get('全壘打', 0), errors='coerce').fillna(0).sum()
-            bb = pd.to_numeric(df_sub.get('四壞球', 0), errors='coerce').fillna(0).sum()
+            pa = df_sub['打席'].sum()
+            ab = df_sub['打數'].sum()
+            h = df_sub['安打'].sum()
+            h2 = df_sub['二壘安打'].sum()
+            h3 = df_sub['三壘安打'].sum()
+            hr = df_sub['全壘打'].sum()
+            bb = df_sub['四壞球'].sum()
             h1 = h - h2 - h3 - hr
             obp = (h + bb) / pa if pa > 0 else 0
             slg = (h1 + 2*h2 + 3*h3 + 4*hr) / ab if ab > 0 else 0
             return obp + slg
 
         def calc_era_loop(df_sub):
-            outs = pd.to_numeric(df_sub.get('局數(整數)', 0), errors='coerce').fillna(0).sum() * 3 + pd.to_numeric(df_sub.get('局數(出局數)', 0), errors='coerce').fillna(0).sum()
+            outs = df_sub['局數(整數)'].sum()*3 + df_sub['局數(出局數)'].sum()
             ip = outs / 3.0
-            er = pd.to_numeric(df_sub.get('自責分', 0), errors='coerce').fillna(0).sum()
+            er = df_sub['自責分'].sum()
             return (er * 9) / ip if ip > 0 else 0.0
 
-        b_split = df_b_full.copy()
+        b_split = df_b_clean.copy()
         ha_diff_b, rw_diff_b = [], []
         if not b_split.empty:
-            b_split['Loc'] = b_split.apply(lambda r: 'Home' if global_home_dict.get(str(r['賽事階段']),'') == r['球隊'] else 'Away', axis=1)
+            b_split['Loc'] = b_split.apply(lambda r: 'Home' if get_home_team_tab5(str(r['賽事階段'])) == r['球隊'] else 'Away', axis=1)
             b_split['Type'] = b_split['賽事階段'].astype(str).apply(lambda x: 'RS' if '例行賽' in x else ('WS' if '世界大賽' in x else 'Other'))
             for (team, name), g in b_split.groupby(['球隊', '球員姓名']):
                 g_h, g_a = g[g['Loc'] == 'Home'], g[g['Loc'] == 'Away']
-                pa_h = pd.to_numeric(g_h.get('打席', 0), errors='coerce').fillna(0).sum()
-                pa_a = pd.to_numeric(g_a.get('打席', 0), errors='coerce').fillna(0).sum()
+                pa_h, pa_a = g_h['打席'].sum(), g_a['打席'].sum()
                 if pa_h >= 10 and pa_a >= 10:
                     ops_h, ops_a = calc_ops_loop(g_h), calc_ops_loop(g_a)
                     ha_diff_b.append({'Name': f"[{team}] {name}", 'Diff': abs(ops_h - ops_a), 'Home_OPS': ops_h, 'Away_OPS': ops_a})
                 
                 g_rs, g_ws = g[g['Type'] == 'RS'], g[g['Type'] == 'WS']
-                pa_rs = pd.to_numeric(g_rs.get('打席', 0), errors='coerce').fillna(0).sum()
-                pa_ws = pd.to_numeric(g_ws.get('打席', 0), errors='coerce').fillna(0).sum()
+                pa_rs, pa_ws = g_rs['打席'].sum(), g_ws['打席'].sum()
                 if pa_rs >= 10 and pa_ws >= 10:
                     ops_rs, ops_ws = calc_ops_loop(g_rs), calc_ops_loop(g_ws)
                     rw_diff_b.append({'Name': f"[{team}] {name}", 'Diff': abs(ops_rs - ops_ws), 'RS_OPS': ops_rs, 'WS_OPS': ops_ws})
 
-        p_split = df_p_full.copy()
+        p_split = df_p_clean.copy()
         ha_diff_p, rw_diff_p = [], []
         if not p_split.empty:
-            p_split['Loc'] = p_split.apply(lambda r: 'Home' if global_home_dict.get(str(r['賽事階段']),'') == r['球隊'] else 'Away', axis=1)
+            p_split['Loc'] = p_split.apply(lambda r: 'Home' if get_home_team_tab5(str(r['賽事階段'])) == r['球隊'] else 'Away', axis=1)
             p_split['Type'] = p_split['賽事階段'].astype(str).apply(lambda x: 'RS' if '例行賽' in x else ('WS' if '世界大賽' in x else 'Other'))
             for (team, name), g in p_split.groupby(['球隊', '投手姓名']):
                 g_h, g_a = g[g['Loc'] == 'Home'], g[g['Loc'] == 'Away']
-                ip_h = (pd.to_numeric(g_h.get('局數(整數)', 0), errors='coerce').fillna(0).sum()*3 + pd.to_numeric(g_h.get('局數(出局數)', 0), errors='coerce').fillna(0).sum())/3.0
-                ip_a = (pd.to_numeric(g_a.get('局數(整數)', 0), errors='coerce').fillna(0).sum()*3 + pd.to_numeric(g_a.get('局數(出局數)', 0), errors='coerce').fillna(0).sum())/3.0
+                ip_h = (g_h['局數(整數)'].sum()*3 + g_h['局數(出局數)'].sum())/3.0
+                ip_a = (g_a['局數(整數)'].sum()*3 + g_a['局數(出局數)'].sum())/3.0
                 if ip_h >= 5.0 and ip_a >= 5.0:
                     era_h, era_a = calc_era_loop(g_h), calc_era_loop(g_a)
                     ha_diff_p.append({'Name': f"[{team}] {name}", 'Diff': abs(era_h - era_a), 'Home_ERA': era_h, 'Away_ERA': era_a})
 
                 g_rs, g_ws = g[g['Type'] == 'RS'], g[g['Type'] == 'WS']
-                ip_rs = (pd.to_numeric(g_rs.get('局數(整數)', 0), errors='coerce').fillna(0).sum()*3 + pd.to_numeric(g_rs.get('局數(出局數)', 0), errors='coerce').fillna(0).sum())/3.0
-                ip_ws = (pd.to_numeric(g_ws.get('局數(整數)', 0), errors='coerce').fillna(0).sum()*3 + pd.to_numeric(g_ws.get('局數(出局數)', 0), errors='coerce').fillna(0).sum())/3.0
+                ip_rs = (g_rs['局數(整數)'].sum()*3 + g_rs['局數(出局數)'].sum())/3.0
+                ip_ws = (g_ws['局數(整數)'].sum()*3 + g_ws['局數(出局數)'].sum())/3.0
                 if ip_rs >= 5.0 and ip_ws >= 5.0:
                     era_rs, era_ws = calc_era_loop(g_rs), calc_era_loop(g_ws)
                     rw_diff_p.append({'Name': f"[{team}] {name}", 'Diff': abs(era_rs - era_ws), 'RS_ERA': era_rs, 'WS_ERA': era_ws})
@@ -5969,199 +5891,201 @@ with tab5:
         with c_split1:
             st.markdown("##### 🏏 打者：主客場 OPS 差異最大")
             if ha_diff_b:
-                ha_diff_b = sorted(ha_diff_b, key=lambda x: x['Diff'], reverse=True)[:3]
-                for i, x in enumerate(ha_diff_b):
-                    medal = "🥇" if i == 0 else ("🥈" if i == 1 else "🥉")
-                    st.markdown(f"{medal} **{x['Name']}** \nDiff: **{x['Diff']:.3f}** (主 {x['Home_OPS']:.3f} / 客 {x['Away_OPS']:.3f})")
-            else: 
-                st.caption("尚無符合門檻打者")
-            
+                for i, x in enumerate(sorted(ha_diff_b, key=lambda x: x['Diff'], reverse=True)[:3]):
+                    st.markdown(f"{['🥇','🥈','🥉'][i]} **{x['Name']}** \nDiff: **{x['Diff']:.3f}** (主 {x['Home_OPS']:.3f} / 客 {x['Away_OPS']:.3f})")
+            else: st.caption("尚無符合門檻打者")
             st.markdown("##### 🏏 打者：季賽/大賽 OPS 差異最大")
             if rw_diff_b:
-                rw_diff_b = sorted(rw_diff_b, key=lambda x: x['Diff'], reverse=True)[:3]
-                for i, x in enumerate(rw_diff_b):
-                    medal = "🥇" if i == 0 else ("🥈" if i == 1 else "🥉")
-                    st.markdown(f"{medal} **{x['Name']}** \nDiff: **{x['Diff']:.3f}** (例賽 {x['RS_OPS']:.3f} / WS {x['WS_OPS']:.3f})")
-            else: 
-                st.caption("尚無符合門檻打者")
+                for i, x in enumerate(sorted(rw_diff_b, key=lambda x: x['Diff'], reverse=True)[:3]):
+                    st.markdown(f"{['🥇','🥈','🥉'][i]} **{x['Name']}** \nDiff: **{x['Diff']:.3f}** (例賽 {x['RS_OPS']:.3f} / WS {x['WS_OPS']:.3f})")
+            else: st.caption("尚無符合門檻打者")
 
         with c_split2:
             st.markdown("##### ⚾ 投手：主客場 ERA 差異最大")
             if ha_diff_p:
-                ha_diff_p = sorted(ha_diff_p, key=lambda x: x['Diff'], reverse=True)[:3]
-                for i, x in enumerate(ha_diff_p):
-                    medal = "🥇" if i == 0 else ("🥈" if i == 1 else "🥉")
-                    st.markdown(f"{medal} **{x['Name']}** \nDiff: **{x['Diff']:.2f}** (主 {x['Home_ERA']:.2f} / 客 {x['Away_ERA']:.2f})")
-            else: 
-                st.caption("尚無符合門檻投手")
-            
+                for i, x in enumerate(sorted(ha_diff_p, key=lambda x: x['Diff'], reverse=True)[:3]):
+                    st.markdown(f"{['🥇','🥈','🥉'][i]} **{x['Name']}** \nDiff: **{x['Diff']:.2f}** (主 {x['Home_ERA']:.2f} / 客 {x['Away_ERA']:.2f})")
+            else: st.caption("尚無符合門檻投手")
             st.markdown("##### ⚾ 投手：季賽/大賽 ERA 差異最大")
             if rw_diff_p:
-                rw_diff_p = sorted(rw_diff_p, key=lambda x: x['Diff'], reverse=True)[:3]
-                for i, x in enumerate(rw_diff_p):
-                    medal = "🥇" if i == 0 else ("🥈" if i == 1 else "🥉")
-                    st.markdown(f"{medal} **{x['Name']}** \nDiff: **{x['Diff']:.2f}** (例賽 {x['RS_ERA']:.2f} / WS {x['WS_ERA']:.2f})")
-            else: 
-                st.caption("尚無符合門檻投手")
+                for i, x in enumerate(sorted(rw_diff_p, key=lambda x: x['Diff'], reverse=True)[:3]):
+                    st.markdown(f"{['🥇','🥈','🥉'][i]} **{x['Name']}** \nDiff: **{x['Diff']:.2f}** (例賽 {x['RS_ERA']:.2f} / WS {x['WS_ERA']:.2f})")
+            else: st.caption("尚無符合門檻投手")
+
         st.divider()
 
-        st.markdown("### 🏟️ 團隊與個人單場極端紀錄")
-        def get_extreme_clean(df, col, is_max=True, is_pitcher=False):
-            if df.empty or col not in df.columns: 
-                return 0, []
+        st.markdown("### 🎢 個人單場 WAR 值暴衝與狂扣紀錄 (Game of a Lifetime)")
+        game_war_records = []
+        if not df_b_clean.empty:
+            for _, r in df_b_clean.iterrows():
+                pa = r['打席']
+                if pa == 0: continue
+                ab, h, h2, h3, hr, rbi, run, bb, so = [r[c] for c in ['打數', '安打', '二壘安打', '三壘安打', '全壘打', '打點', '得分', '四壞球', '三振']]
+                wrc_p = (((0.69*bb + 0.88*(h-h2-h3-hr) + 1.25*h2 + 1.59*h3 + 2.06*hr) / pa) / 0.320 - 1) * 200 + 100
+                pos_adj_dict = {"C": 0.15, "SS": 0.12, "2B": 0.05, "3B": 0.05, "CF": 0.05, "LF": 0.00, "RF": 0.00, "1B": -0.05, "DH": -0.12, "PH": -0.12, "PR": -0.12}
+                e_war = (((wrc_p - 70) / 80) + pos_adj_dict.get(r.get('守位','DH'), -0.12)) * (pa / 15)
+                game_war_records.append({'Type': 'Batter', 'Stage': str(r['賽事階段']).strip(), 'WAR': e_war, 'Name': f"[{r['球隊']}] {r['球員姓名']} ({int(ab)}-{int(h)})"})
+        if not df_p_clean.empty:
+            for _, r in df_p_clean.iterrows():
+                outs = r['局數(整數)']*3 + r['局數(出局數)']
+                if outs == 0: continue
+                er, h_a, bb_a, k, hr_a = [r[c] for c in ['自責分', '被安打', '四壞球', '奪三振', '被全壘打']]
+                tra = ((er*9/(outs/3.0)) + (((13*hr_a)+(3*bb_a)-(2*k))/(outs/3.0) + 3.10)) / 2.0
+                e_war = ((10.60*1.30 - tra) / 2.12) * ((outs/3.0) / 10)
+                game_war_records.append({'Type': 'Pitcher', 'Stage': str(r['賽事階段']).strip(), 'WAR': e_war, 'Name': f"[{r['球隊']}] {r['投手姓名']} ({int(outs//3)}.{int(outs%3)}局)"})
+        
+        if game_war_records:
+            df_gwar = pd.DataFrame(game_war_records)
+            cg1, cg2 = st.columns(2)
+            with cg1:
+                st.markdown("**🔥 封神之戰 (單場最高 WAR Top 3)**")
+                for _, r in df_gwar.sort_values('WAR', ascending=False).head(3).iterrows(): st.caption(f" 🥇 {r['Name']}：**+{r['WAR']:.2f} WAR** ({r['Stage']})")
+            with cg2:
+                st.markdown("**🥶 毀滅性戰犯 (單場最低 WAR Top 3)**")
+                for _, r in df_gwar.sort_values('WAR', ascending=True).head(3).iterrows(): st.caption(f" 💣 {r['Name']}：**{r['WAR']:.2f} WAR** ({r['Stage']})")
+
+        st.divider()
+
+        st.markdown("### 🤯 團隊與個人單場極端紀錄大整合 (全部呈現 Top 3 排行)")
+        
+        def display_extreme_top3(title, df, col, is_max=True, is_pitcher=False, unit="", icon="🥇"):
+            if df.empty or col not in df.columns: return
             df_c = df.copy()
-            df_c[col] = pd.to_numeric(df_c[col], errors='coerce').fillna(0)
-            if df_c.empty: 
-                return 0, []
-            val = df_c[col].max() if is_max else df_c[col].min()
-            if val == 0: 
-                return 0, []
-            rows = df_c[df_c[col] == val]
             name_col = '投手姓名' if is_pitcher else '球員姓名'
-            holder_list = []
-            for _, r in rows.iterrows():
-                stage_clean = str(r.get('賽事階段', ''))
-                h_str = f"[{r['球隊']}] {r[name_col]} ({stage_clean})"
-                if h_str not in holder_list: 
-                    holder_list.append(h_str)
-            return val, holder_list
+            
+            unique_vals = sorted(df_c[col].unique(), reverse=is_max)[:3]
+            st.markdown(f"##### {title}")
+            
+            medals = ["🥇", "🥈", "🥉"]
+            for i, val in enumerate(unique_vals):
+                if val == 0 and is_max: continue
+                rows = df_c[df_c[col] == val]
+                holders = list(dict.fromkeys([f"[{r['球隊']}] {r[name_col]} ({str(r['賽事階段']).strip()})" for _, r in rows.iterrows()]))
+                st.markdown(f" **{medals[i]} 歷史值：{int(val)} {unit}**")
+                for h in holders[:3]: st.caption(f"  📌 {h}")
+                if len(holders) > 3: st.caption(f"  💬 *...及其餘 {len(holders)-3} 筆並列紀錄*")
+            st.markdown("<br>", unsafe_allow_html=True)
 
-        def get_team_extreme_clean(df, col, is_max=True):
-            if df.empty or col not in df.columns: 
-                return 0, []
+        def display_team_extreme_top3(title, df, col, is_max=True, unit="", icon="🥇"):
+            if df.empty or col not in df.columns: return
             df_c = df.copy()
-            df_c[col] = pd.to_numeric(df_c[col], errors='coerce').fillna(0)
-            if df_c.empty: 
-                return 0, []
+            
             team_agg = df_c.groupby(['賽事階段', '球隊'])[col].sum().reset_index()
-            val = team_agg[col].max() if is_max else team_agg[col].min()
-            if val == 0: 
-                return 0, []
-            rows = team_agg[team_agg[col] == val]
-            holder_list = []
-            for _, r in rows.iterrows():
-                stage_clean = str(r['賽事階段'])
-                h_str = f"[{r['球隊']}] ({stage_clean})"
-                if h_str not in holder_list: 
-                    holder_list.append(h_str)
-            return val, holder_list
+            unique_vals = sorted(team_agg[col].unique(), reverse=is_max)[:3]
+            st.markdown(f"##### {title}")
+            
+            medals = ["🥇", "🥈", "🥉"]
+            for i, val in enumerate(unique_vals):
+                if val == 0 and is_max: continue
+                rows = team_agg[team_agg[col] == val]
+                holders = list(dict.fromkeys([f"[{r['球隊']}] ({str(r['賽事階段']).strip()})" for _, r in rows.iterrows()]))
+                st.markdown(f" **{medals[i]} 歷史值：{int(val)} {unit}**")
+                for h in holders[:3]: st.caption(f"  📌 {h}")
+                if len(holders) > 3: st.caption(f"  💬 *...及其餘 {len(holders)-3} 筆並列紀錄*")
+            st.markdown("<br>", unsafe_allow_html=True)
 
-        def display_extreme(title, val, names, unit="", icon="🥇"):
-            st.markdown(f"#### {title}")
-            st.markdown(f"**{icon} 歷史極端值：{int(val)} {unit}**")
-            if val == 0: 
-                st.caption("📌 無人達標")
-            else:
-                if len(names) <= 5:
-                    for n in names: st.caption(f"📌 {n}")
-                else:
-                    for n in names[:5]: st.caption(f"📌 {n}")
-                    with st.expander(f"🤝 查看其餘 {len(names)-5} 筆紀錄"):
-                        for n in names[5:]: st.caption(f"📌 {n}")
-            st.divider()
-
-        diff_records, max_diff = [], 0
-        if not df_p_full.empty:
-            for stage, group in df_p_full.groupby('賽事階段'):
-                laa_ra = pd.to_numeric(group[group['球隊']=='LAA']['失分'], errors='coerce').fillna(0).sum()
-                lad_ra = pd.to_numeric(group[group['球隊']=='LAD']['失分'], errors='coerce').fillna(0).sum()
+        diff_records_top3 = []
+        if not df_p_clean.empty:
+            for stage, group in df_p_clean.groupby('賽事階段'):
+                laa_ra = group[group['球隊']=='LAA']['失分'].sum()
+                lad_ra = group[group['球隊']=='LAD']['失分'].sum()
                 diff = abs(laa_ra - lad_ra)
                 if diff > 0:
-                    win_team = 'LAA' if lad_ra > laa_ra else 'LAD'
-                    lose_team = 'LAD' if win_team == 'LAA' else 'LAA'
-                    win_score = max(laa_ra, lad_ra)
-                    lose_score = min(laa_ra, lad_ra)
-                    diff_records.append({'stage': stage, 'diff': diff, 'desc': f"[{win_team}] 狂勝 [{lose_team}] ({int(win_score)}:{int(lose_score)})"})
-        if diff_records:
-            max_diff = max([x['diff'] for x in diff_records])
-            diff_holders = []
-            for x in diff_records:
-                if x['diff'] == max_diff:
-                    stage_clean = str(x['stage'])
-                    h_str = f"{x['desc']} ({stage_clean})"
-                    if h_str not in diff_holders: diff_holders.append(h_str)
-        display_extreme("🩸 血流成河 (單場最大比分差)", max_diff, diff_holders if max_diff > 0 else [], "分", "😱")
+                    w_t, l_t = ('LAA', 'LAD') if lad_ra > laa_ra else ('LAD', 'LAA')
+                    diff_records_top3.append({'stage': str(stage).strip(), 'diff': diff, 'desc': f"[{w_t}] 狂勝 [{l_t}] ({int(max(laa_ra, lad_ra))}:{int(min(laa_ra, lad_ra))})"})
+        st.markdown("##### 😱 血流成河 (團隊單場最大比分差) Top 3")
+        if diff_records_top3:
+            df_diff3 = pd.DataFrame(diff_records_top3)
+            u_diffs = sorted(df_diff3['diff'].unique(), reverse=True)[:3]
+            medals = ["🥇", "🥈", "🥉"]
+            for i, val in enumerate(u_diffs):
+                st.markdown(f" **{medals[i]} 歷史值：{int(val)} 分差**")
+                for _, r in df_diff3[df_diff3['diff'] == val].head(3).iterrows(): st.caption(f"  📌 {r['desc']} ({r['stage']})")
+        else: st.caption(" 📌 暫無紀錄")
+        st.markdown("<br>", unsafe_allow_html=True)
 
-        team_runs_records = []
-        if not df_p_full.empty:
-            for stage, group in df_p_full.groupby('賽事階段'):
-                laa_runs = pd.to_numeric(group[group['球隊']=='LAD']['失分'], errors='coerce').fillna(0).sum()
-                lad_runs = pd.to_numeric(group[group['球隊']=='LAA']['失分'], errors='coerce').fillna(0).sum()
-                if laa_runs > 0: team_runs_records.append({'keys': 'LAA', 'stage': stage, 'runs': laa_runs})
-                if lad_runs > 0: team_runs_records.append({'keys': 'LAD', 'stage': stage, 'runs': lad_runs})
-        tr_val, tr_nam = 0, []
-        if team_runs_records:
-            tr_val = max([x['runs'] for x in team_runs_records])
-            for x in team_runs_records:
-                if x['runs'] == tr_val:
-                    stg = str(x['stage'])
-                    h_str = f"[{x['keys']}] ({stg})"
-                    if h_str not in tr_nam: tr_nam.append(h_str)
-        display_extreme("🎇 煙火大會 (球隊單場最多得分)", tr_val, tr_nam, "分", "🔥")
+        team_runs_top3 = []
+        if not df_p_clean.empty:
+            for stage, group in df_p_clean.groupby('賽事階段'):
+                laa_runs = group[group['球隊']=='LAD']['失分'].sum()
+                lad_runs = group[group['球隊']=='LAA']['失分'].sum()
+                stg_cleaned = str(stage).strip()
+                if laa_runs > 0: team_runs_top3.append({'team': 'LAA', 'stage': stg_cleaned, 'runs': laa_runs})
+                if lad_runs > 0: team_runs_top3.append({'team': 'LAD', 'stage': stg_cleaned, 'runs': lad_runs})
+        st.markdown("##### 🔥 煙火大會 (團隊單場最多得分) Top 3")
+        if team_runs_top3:
+            df_runs3 = pd.DataFrame(team_runs_top3)
+            u_runs = sorted(df_runs3['runs'].unique(), reverse=True)[:3]
+            medals = ["🥇", "🥈", "🥉"]
+            for i, val in enumerate(u_runs):
+                st.markdown(f" **{medals[i]} 歷史值：{int(val)} 分**")
+                for _, r in df_runs3[df_runs3['runs'] == val].head(3).iterrows(): st.caption(f"  📌 [{r['team']}] ({r['stage']})")
+        else: st.caption(" 📌 暫無紀錄")
+        st.markdown("<br>", unsafe_allow_html=True)
 
-        t_h_val, t_h_nam = get_team_extreme_clean(df_b_full, '安打', True)
-        display_extreme("🏏 機槍打線 (球隊單場最多安打)", t_h_val, t_h_nam, "支", "🔥")
-        t_hr_val, t_hr_nam = get_team_extreme_clean(df_b_full, '全壘打', True)
-        display_extreme("🚀 轟炸大隊 (球隊單場最多全壘打)", t_hr_val, t_hr_nam, "轟", "🔥")
+        display_team_extreme_top3("🏏 機槍打線 (球隊單場最多安打) Top 3", df_b_clean, '安打', True, "支")
+        display_team_extreme_top3("🚀 轟炸大隊 (球隊單場最多全壘打) Top 3", df_b_clean, '全壘打', True, "轟")
+        display_extreme_top3("💪 燃燒手臂 (單一投手單場最多用球數) Top 3", df_p_clean, '投球數', True, True, "球")
+        display_team_extreme_top3("🥎 團隊血汗日 (團隊單場最多用球數) Top 3", df_p_clean, '投球數', True, "球")
+        display_extreme_top3("🌪️ 電風扇之王 (打者單場最多被三振) Top 3", df_b_clean, '三振', True, False, "次")
+        display_extreme_top3("🧨 發球機核爆 (投手單場最多失分) Top 3", df_p_clean, '失分', True, True, "分")
         
-        np_p_val, np_p_nam = get_extreme_clean(df_p_full, '投球數', True, True)
-        display_extreme("💪 燃燒手臂 (單一投手最多用球數)", np_p_val, np_p_nam, "球")
-        
-        np_team_val, np_team_nam = get_team_extreme_clean(df_p_full, '投球數', True)
-        display_extreme("🥎 團隊血汗日 (團隊單場最多用球數)", np_team_val, np_team_nam, "球", "🦾")
-        
-        k_b_val, k_b_nam = get_extreme_clean(df_b_full, '三振', True, False)
-        display_extreme("🌪️ 電風扇之王 (打者單場最多被三振)", k_b_val, k_b_nam, "次")
-        r_p_val, r_p_nam = get_extreme_clean(df_p_full, '失分', True, True)
-        display_extreme("🧨 發球機核爆 (投手單場最多失分)", r_p_val, r_p_nam, "分")
-        
-        df_b_c = df_b_full.copy()
-        for c in ['打數', '安打', '打點']: 
-            if c not in df_b_c.columns: df_b_c[c] = 0
-            df_b_c[c] = pd.to_numeric(df_b_c[c], errors='coerce').fillna(0)
-        df_sombrero = df_b_c[(df_b_c['安打'] == 0) & (df_b_c['打數'] >= 3)]
-        sombrero_val, sombrero_nam = get_extreme_clean(df_sombrero, '打數', True, False)
-        display_extreme("🏆 黃金老帽 (單場至少3打數且0安打)", sombrero_val, sombrero_nam, "打數")
-        df_no_rbi = df_b_c[(df_b_c['打點'] == 0) & (df_b_c['安打'] >= 2)]
-        norbi_val, norbi_nam = get_extreme_clean(df_no_rbi, '安打', True, False)
-        display_extreme("🏃‍♂️ 白做工 (單場至少2安打卻0打點)", norbi_val, norbi_nam, "支")
+        display_extreme_top3("🎩 黃金老帽 (單場至少3打數且0安打) Top 3", df_b_clean[(df_b_clean['安打'] == 0) & (df_b_clean['打數'] >= 3)], '打數', True, False, "打數")
+        display_extreme_top3("🏃‍♂️ 白做工 (單場至少2安打卻0打點) Top 3", df_b_clean[(df_b_clean['打點'] == 0) & (df_b_clean['安打'] >= 2)], '安打', True, False, "支")
 # ==========================================
 # --- 分頁 6：🆚 球員終極 PK 台 (Stathead Comparison) ---
 # ==========================================
 with tab6:
     st.header("🆚 球員終極 PK 台 (Head-to-Head Comparison)")
-    st.caption("復刻 Baseball-Reference 經典比較工具：比對生涯或單季數據，系統將自動高光優勢方，並彙整所有得獎紀錄！")
+    st.caption("復刻 Baseball-Reference 經典比較工具：比對生涯或單季數據，系統將自動高光優勢方，並彙整所有跨隊得獎紀錄！")
 
     df_b = st.session_state.get('df_b_raw', pd.DataFrame())
     df_p = st.session_state.get('df_p_raw', pd.DataFrame())
+    df_p_full = df_p.copy() # 用於算冠軍等全域判斷
 
     if df_b.empty and df_p.empty:
         st.warning("⚠️ 目前無數據可供比較。")
     else:
-        # 1. 模式選擇 (打者/投手、生涯/單季)
-        c_mode1, c_mode2 = st.columns(2)
+        # 1. 模式選擇 (打者/投手、賽事階段、生涯/單季)
+        c_mode1, c_mode2, c_mode3 = st.columns([1.5, 1.5, 2])
         with c_mode1:
-            pk_type = st.radio("⚾ 選擇比較類型", ["🏏 打者比較 (Batters)", "🥎 投手比較 (Pitchers)"], horizontal=True)
+            pk_type = st.radio("⚾ 比較類型", ["🏏 打者 (Batters)", "🥎 投手 (Pitchers)"], horizontal=True)
             is_pk_batter = "打者" in pk_type
         with c_mode2:
+            pk_stage = st.radio("⚾ 賽事類型", ["例行賽 (Regular Season)", "不限 (All)"], horizontal=True)
+            stage_prefix = "例行賽" if "例行賽" in pk_stage else ""
+        with c_mode3:
             season_options = ["十年總成績 (Career)"] + SEASONS
             pk_season = st.selectbox("📅 選擇比較時間區間", season_options)
 
         # 2. 篩選對應時間段的數據庫
-        prefix = "" if "十年總成績" in pk_season else f"[S{pk_season.split(' ')[1]}]"
+        season_prefix = "" if "十年總成績" in pk_season else f"[S{pk_season.split(' ')[1]}]"
         
+        # 建立基準資料庫 (先套用賽事階段過濾)
         if is_pk_batter:
-            pk_df = df_b[df_b['賽事階段'].astype(str).str.contains(prefix, regex=False)] if prefix else df_b.copy()
+            base_df = df_b[df_b['賽事階段'].astype(str).str.contains(stage_prefix, regex=False)] if stage_prefix else df_b.copy()
             name_col = '球員姓名'
         else:
-            pk_df = df_p[df_p['賽事階段'].astype(str).str.contains(prefix, regex=False)] if prefix else df_p.copy()
+            base_df = df_p[df_p['賽事階段'].astype(str).str.contains(stage_prefix, regex=False)] if stage_prefix else df_p.copy()
             name_col = '投手姓名'
 
-        if pk_df.empty:
-            st.info("該賽季尚無數據可供比較。")
+        # 套用賽季過濾
+        if season_prefix:
+            pk_df = base_df[base_df['賽事階段'].astype(str).str.contains(season_prefix, regex=False)].copy()
         else:
-            # 整理所有可用球員清單 (格式: [球隊] 姓名)
-            all_players = sorted(list(set([f"[{r['球隊']}] {r[name_col]}" for _, r in pk_df.iterrows()])))
+            pk_df = base_df.copy()
+
+        if pk_df.empty:
+            st.info("該條件下尚無數據可供比較。")
+        else:
+            # ✨ 跨隊整合：只取球員姓名，動態組裝效力球隊
+            all_team_map = pk_df.sort_values('時間戳記').groupby(name_col)['球隊'].unique().apply(lambda x: "/".join(x))
+            
+            all_players = []
+            for p in pk_df[name_col].dropna().unique():
+                tms = all_team_map.get(p, "Unknown")
+                all_players.append(f"[{tms}] {p}")
+            all_players = sorted(all_players)
             
             if 'pk_p1_memory' not in st.session_state: st.session_state['pk_p1_memory'] = None
             if 'pk_p2_memory' not in st.session_state: st.session_state['pk_p2_memory'] = None
@@ -6176,7 +6100,6 @@ with tab6:
                 st.session_state['pk_p1_memory'] = st.session_state['pk_p1_sel']
                 st.session_state['pk_p2_memory'] = st.session_state['pk_p2_sel']
             
-            # 3. 雙欄位選擇球員
             st.markdown("---")
             c_p1, c_vs, c_p2 = st.columns([2, 0.5, 2])
             with c_p1:
@@ -6192,106 +6115,68 @@ with tab6:
             # 4. 數據運算引擎
             def get_pk_stats(full_name, is_batter):
                 if not full_name: return None
-                team = full_name.split('] ')[0].replace('[', '')
                 name = full_name.split('] ')[1]
                 
-                sub_df = pk_df[(pk_df['球隊'] == team) & (pk_df[name_col] == name)].copy()
+                sub_df = pk_df[pk_df[name_col] == name].copy()
                 if sub_df.empty: return None
 
                 import re
                 sub_df['Season'] = sub_df['賽事階段'].astype(str).apply(lambda x: re.search(r'\[S(\d+)\]', x).group(1) if re.search(r'\[S(\d+)\]', x) else '1')
+                display_name = full_name
 
-                # ✨ 掃描 Awards & Honors (確保徹底移除反斜線，同時保留大谷 1st Team 條款)
+                # ✨ 掃描 Awards & Honors (精準版：修正 Regex 破圖，徹底恢復大獎)
                 awards = {'Championships': 0, 'MVP': 0, 'Silver Slugg': 0, 'Cy Young': 0, '1st Team': 0, 'FMVP': 0, 'Game MVP': 0}
                 if 'season_cache' in globals() or 'season_cache' in locals():
-                    s_keys = [int(pk_season.split(' ')[1])] if prefix else list(season_cache.keys())
+                    s_keys = [int(pk_season.split(' ')[1])] if season_prefix else list(season_cache.keys())
                     for s_k in s_keys:
                         if s_k in season_cache:
                             mvp, mvp_df, cy, cy_df, ss, ss_df, roty, roty_df, fmvp, fmvp_df, rs_cand, all_mlb, is_rs_fin, is_ws_fin = season_cache[s_k]
                             
                             played_this_season = False
                             if is_batter:
-                                s_sub_b = df_b[(df_b['球隊']==team) & (df_b['球員姓名']==name) & (df_b['賽事階段'].astype(str).str.contains(f"[S{s_k}]", regex=False))]
+                                s_sub_b = df_b[(df_b['球員姓名']==name) & (df_b['賽事階段'].astype(str).str.contains(f"[S{s_k}]", regex=False))]
                                 if not s_sub_b.empty: played_this_season = True
                             else:
-                                s_sub_p = df_p[(df_p['球隊']==team) & (df_p['投手姓名']==name) & (df_p['賽事階段'].astype(str).str.contains(f"[S{s_k}]", regex=False))]
+                                s_sub_p = df_p[(df_p['投手姓名']==name) & (df_p['賽事階段'].astype(str).str.contains(f"[S{s_k}]", regex=False))]
                                 if not s_sub_p.empty: played_this_season = True
                                 
                             if played_this_season:
                                 if is_rs_fin:
-                                    if not mvp_df.empty and mvp_df.iloc[0]['球員'] == full_name: awards['MVP'] += 1
-                                    if not cy_df.empty and cy_df.iloc[0]['球員'] == full_name: awards['Cy Young'] += 1
-                                    if not ss_df.empty and ss_df.iloc[0]['球員'] == full_name: awards['Silver Slugg'] += 1
-                                    
-                                    # 動態重建該賽季年度第一隊
-                                    if rs_cand:
-                                        t_batters = {k: v for k, v in rs_cand.items() if v.get('類型') in ['打者', '二刀流']}
-                                        t_pitchers = {k: v for k, v in rs_cand.items() if v.get('類型') in ['投手', '二刀流']}
-                                        sel_1st = set()
-                                        fst_cnt = 0
-                                        
-                                        def pick_1st(pos_list, is_dh=False):
-                                            if is_dh: cands = {k: v for k, v in t_batters.items() if k not in sel_1st and v.get('Qual', False)}
-                                            else: cands = {k: v for k, v in t_batters.items() if v.get('Pos', 'DH') in pos_list and k not in sel_1st and v.get('Qual', False)}
-                                            pos_cands = {k: v for k, v in cands.items() if v.get('eWAR', 0) > 0}
-                                            if pos_cands:
-                                                best = max(pos_cands.items(), key=lambda x: x[1]['eWAR'])[0]
-                                                sel_1st.add(best)
-                                                if best == full_name: return 1
-                                            return 0
+                                    if not mvp_df.empty and name in str(mvp_df.iloc[0]['球員']): awards['MVP'] += 1
+                                    if not cy_df.empty and name in str(cy_df.iloc[0]['球員']): awards['Cy Young'] += 1
+                                    if not ss_df.empty and name in str(ss_df.iloc[0]['球員']): awards['Silver Slugg'] += 1
+                                    for mlb_p in all_mlb:
+                                        if name in str(mlb_p): awards['1st Team'] += 1
 
-                                        fst_cnt += pick_1st(['C'])
-                                        fst_cnt += pick_1st(['1B'])
-                                        fst_cnt += pick_1st(['2B'])
-                                        fst_cnt += pick_1st(['3B'])
-                                        fst_cnt += pick_1st(['SS'])
-                                        
-                                        of_base = {k: v for k, v in t_batters.items() if v.get('Pos', 'DH') in ['LF', 'CF', 'RF', 'OF'] and k not in sel_1st and v.get('Qual', False)}
-                                        of_cands = {k: v for k, v in of_base.items() if v.get('eWAR', 0) > 0}
-                                        if of_cands:
-                                            top_ofs = sorted(of_cands.items(), key=lambda x: x[1]['eWAR'], reverse=True)[:3]
-                                            for x in top_ofs:
-                                                sel_1st.add(x[0])
-                                                if x[0] == full_name: fst_cnt += 1
-                                                
-                                        fst_cnt += pick_1st([], is_dh=True)
-                                        
-                                        sp_base = {k: v for k, v in t_pitchers.items() if v.get('Qual', False)}
-                                        sp_cands = {k: v for k, v in sp_base.items() if v.get('eWAR', 0) > 0}
-                                        if sp_cands:
-                                            best_sp = max(sp_cands.items(), key=lambda x: x[1]['eWAR'])[0]
-                                            if best_sp == full_name: fst_cnt += 1
-                                            
-                                        rp_base = {k: v for k, v in t_pitchers.items() if v.get('SV', 0) > 0 or v.get('HLD', 0) > 0}
-                                        rp_cands = {k: v for k, v in rp_base.items() if v.get('eWAR', 0) > 0}
-                                        if rp_cands:
-                                            best_rp = max(rp_cands.items(), key=lambda x: x[1]['eWAR'])[0]
-                                            if best_rp == full_name: fst_cnt += 1
-                                            
-                                        awards['1st Team'] += fst_cnt
-
-                                if is_ws_fin:
-                                    if not fmvp_df.empty and fmvp_df.iloc[0]['球員'] == full_name: awards['FMVP'] += 1
+                            if is_ws_fin:
+                                if not fmvp_df.empty and name in str(fmvp_df.iloc[0]['球員']): awards['FMVP'] += 1
+                                
+                                ws_df = df_p_full[df_p_full['賽事階段'].astype(str).str.contains(f"[S{s_k}] 世界大賽", regex=False)]
+                                if not ws_df.empty:
+                                    laa_w, lad_w = 0, 0
+                                    for stg, grp in ws_df.groupby('賽事階段', sort=False):
+                                        if any('勝' in str(x) for x in grp[grp['球隊']=='LAA']['勝敗'].values): laa_w += 1
+                                        if any('勝' in str(x) for x in grp[grp['球隊']=='LAD']['勝敗'].values): lad_w += 1
+                                    ws_winner = "LAA" if laa_w >= 4 else "LAD" if lad_w >= 4 else None
                                     
-                                    # 計算世界大賽冠軍戒指
-                                    ws_df = df_p[df_p['賽事階段'].astype(str).str.contains(f"[S{s_k}] 世界大賽", regex=False)]
-                                    if not ws_df.empty:
-                                        laa_w, lad_w = 0, 0
-                                        for stg, grp in ws_df.groupby('賽事階段', sort=False):
-                                            if any('勝' in str(x) for x in grp[grp['球隊']=='LAA']['勝敗'].values): laa_w += 1
-                                            if any('勝' in str(x) for x in grp[grp['球隊']=='LAD']['勝敗'].values): lad_w += 1
-                                        ws_winner = "LAA" if laa_w >= 4 else "LAD" if lad_w >= 4 else None
-                                        if ws_winner == team:
+                                    if ws_winner:
+                                        played_ws_winner = False
+                                        if is_batter:
+                                            s_sub_ws = df_b[(df_b['球員姓名']==name) & (df_b['賽事階段'].astype(str).str.contains(f"[S{s_k}]", regex=False))]
+                                            if not s_sub_ws.empty and s_sub_ws.iloc[-1]['球隊'] == ws_winner: played_ws_winner = True
+                                        else:
+                                            s_sub_ws = df_p[(df_p['投手姓名']==name) & (df_p['賽事階段'].astype(str).str.contains(f"[S{s_k}]", regex=False))]
+                                            if not s_sub_ws.empty and s_sub_ws.iloc[-1]['球隊'] == ws_winner: played_ws_winner = True
+                                            
+                                        if played_ws_winner:
                                             awards['Championships'] += 1
                                         
-                # 計算單場 MVP
-                raw_df_for_mvp = df_b if is_batter else df_p
-                if prefix: raw_df_for_mvp = raw_df_for_mvp[raw_df_for_mvp['賽事階段'].astype(str).str.contains(prefix, regex=False)]
+                raw_df_for_mvp = base_df
+                if season_prefix: raw_df_for_mvp = raw_df_for_mvp[raw_df_for_mvp['賽事階段'].astype(str).str.contains(season_prefix, regex=False)]
                 if '單場MVP' in raw_df_for_mvp.columns:
-                    col_to_check = '球員姓名' if is_batter else '投手姓名'
-                    awards['Game MVP'] = raw_df_for_mvp[(raw_df_for_mvp['球隊'] == team) & (raw_df_for_mvp[col_to_check] == name) & (raw_df_for_mvp['單場MVP'].notna()) & (raw_df_for_mvp['單場MVP'].astype(str).str.strip() != "")].shape[0]
+                    awards['Game MVP'] = raw_df_for_mvp[(raw_df_for_mvp[name_col] == name) & (raw_df_for_mvp['單場MVP'].notna()) & (raw_df_for_mvp['單場MVP'].astype(str).str.strip() != "")].shape[0]
 
-                res = {'Awards': awards}
+                res = {'Awards': awards, 'DisplayName': display_name}
 
                 if is_batter:
                     pa = pd.to_numeric(sub_df['打席'], errors='coerce').fillna(0).sum()
@@ -6312,11 +6197,11 @@ with tab6:
                     slg = (h1 + 2*h2 + 3*h3 + 4*hr) / ab if ab > 0 else 0
                     ops = obp + slg
                     
-                    # ✨ 呼叫全域引擎，徹底統一打者 OPS+ 與 WAR！
+                    # ✨ 呼叫全域引擎，徹底統一打者 WAR (加權守位校正版)
                     player_ewar = 0.0
                     for s in sub_df['Season'].unique():
                         s_df = sub_df[sub_df['Season'] == s]
-                        lg_s_df = pk_df[pk_df['賽事階段'].astype(str).str.contains(f"[S{s}]", regex=False)]
+                        lg_s_df = base_df[base_df['賽事階段'].astype(str).str.contains(f"[S{s}]", regex=False)]
                         
                         s_pa = pd.to_numeric(lg_s_df['打席'], errors='coerce').fillna(0).sum()
                         s_h = pd.to_numeric(lg_s_df['安打'], errors='coerce').fillna(0).sum()
@@ -6338,10 +6223,17 @@ with tab6:
                         p_1b = p_h - p_2b - p_3b - p_hr
                         
                         p_woba = (0.69 * p_bb + 0.88 * p_1b + 1.25 * p_2b + 1.59 * p_3b + 2.06 * p_hr) / p_pa if p_pa > 0 else 0
-                        p_wrc_plus = global_calc_wrc_plus(p_woba, s_lg_woba)
+                        p_wrc_plus = ((p_woba / s_lg_woba) - 1) * 200 + 100 if s_lg_woba > 0 else 0
                         
-                        p_pos = s_df['守位'].value_counts().index[0] if '守位' in s_df.columns and not s_df['守位'].empty else 'DH'
-                        s_ewar = global_calc_batter_ewar(p_wrc_plus, p_pos, p_pa)
+                        pos_adj_dict = {"C": 0.15, "SS": 0.12, "2B": 0.05, "3B": 0.05, "CF": 0.05, "LF": 0.00, "RF": 0.00, "1B": -0.05, "DH": -0.12, "PH": -0.12, "PR": -0.12}
+                        if '守位' in s_df.columns:
+                            total_pos_adj = sum(pos_adj_dict.get(row['守位'], -0.12) * pd.to_numeric(row['打席'], errors='coerce') for _, row in s_df.iterrows())
+                            weighted_pos_adj = total_pos_adj / p_pa if p_pa > 0 else -0.12
+                        else:
+                            weighted_pos_adj = -0.12
+
+                        s_ewar = (((p_wrc_plus - 70) / 80) + weighted_pos_adj) * (p_pa / 15)
+                        s_ewar = 0.0 if abs(s_ewar) < 0.05 else round(s_ewar, 1)
                         player_ewar += s_ewar
                         
                     lg_pa = pd.to_numeric(pk_df['打席'], errors='coerce').fillna(0).sum()
@@ -6353,9 +6245,9 @@ with tab6:
                     lg_hr = pd.to_numeric(pk_df['全壘打'], errors='coerce').fillna(0).sum()
                     lg_1b = lg_h - lg_2b - lg_3b - lg_hr
                     
-                    lg_obp = (lg_h + lg_bb) / lg_pa if lg_pa > 0 else 0
-                    lg_slg = (lg_1b + 2*lg_2b + 3*lg_3b + 4*lg_hr) / lg_ab if lg_ab > 0 else 0
-                    ops_plus = global_calc_ops_plus(obp, slg, lg_obp, lg_slg)
+                    lg_obp = (lg_h + lg_bb) / lg_pa if lg_pa > 0 else 0.320
+                    lg_slg = (lg_1b + 2*lg_2b + 3*lg_3b + 4*lg_hr) / lg_ab if lg_ab > 0 else 0.400
+                    ops_plus = 100 * ((obp / max(0.001, lg_obp)) + (slg / max(0.001, lg_slg)) - 1)
 
                     res.update({'WAR': round(player_ewar, 1), 'G': int(g), 'PA': int(pa), 'H': int(h), 'HR': int(hr), 
                                 'RBI': int(rbi), 'SB': int(sb), 'AVG': avg, 'OBP': obp, 'SLG': slg, 'OPS': ops, 'OPS+': round(ops_plus)})
@@ -6380,6 +6272,7 @@ with tab6:
                     fip = (((13 * hr) + (3 * bb) - (2 * so)) / ip) + 3.10 if ip > 0 else 3.10
                     whip = (h + bb) / ip if ip > 0 else 0.0
                     so9 = (so * 9) / ip if ip > 0 else 0.0
+                    so_bb = so / bb if bb > 0 else float('inf')
                     
                     lg_outs = (pd.to_numeric(pk_df['局數(整數)'], errors='coerce').fillna(0).sum() * 3 + pd.to_numeric(pk_df['局數(出局數)'], errors='coerce').fillna(0).sum())
                     lg_ip = lg_outs / 3.0
@@ -6391,7 +6284,7 @@ with tab6:
                     player_ewar = 0.0
                     for s in sub_df['Season'].unique():
                         s_df = sub_df[sub_df['Season'] == s]
-                        lg_s_df = pk_df[pk_df['賽事階段'].astype(str).str.contains(f"[S{s}]", regex=False)]
+                        lg_s_df = base_df[base_df['賽事階段'].astype(str).str.contains(f"[S{s}]", regex=False)]
                         
                         s_outs = (pd.to_numeric(lg_s_df['局數(整數)'], errors='coerce').fillna(0).sum() * 3) + pd.to_numeric(lg_s_df['局數(出局數)'], errors='coerce').fillna(0).sum()
                         s_lg_ip = s_outs / 3.0
@@ -6408,11 +6301,18 @@ with tab6:
                         p_era = (p_er * 9) / p_ip if p_ip > 0 else float('inf') if p_er > 0 else 0.0
                         p_fip = (((13 * p_hr) + (3 * p_bb) - (2 * p_so)) / p_ip) + 3.10 if p_ip > 0 else float('inf') if (13*p_hr+3*p_bb-2*p_so)>0 else 3.10
                         
-                        s_ewar = global_calc_pitcher_ewar(p_era, p_fip, p_ip, s_lg_era, int(s))
+                        s_rep_level = s_lg_era * 1.30
+                        s_era_div = max(1.5, s_lg_era * 0.2)
+                        tra = (p_era * 0.3) + (p_fip * 0.7) if int(s) >= 6 else (p_era + p_fip) / 2.0
+                        
+                        if p_ip == 0: s_ewar = (-0.1 * p_er) - (0.05 * p_bb)
+                        else: s_ewar = ((s_rep_level - tra) / s_era_div) * (p_ip / 10)
+                        
+                        s_ewar = 0.0 if abs(s_ewar) < 0.05 else round(s_ewar, 1)
                         player_ewar += s_ewar
 
                     res.update({'WAR': round(player_ewar, 1), 'W': int(w), 'L': int(l), 'ERA': era, 'ERA+': round(era_plus), 'G': int(g), 
-                                'IP': round(ip, 1), 'SO': int(so), 'WHIP': whip, 'FIP': fip, 'SO/9': so9})
+                                'IP': round(ip, 1), 'SO': int(so), 'WHIP': whip, 'FIP': fip, 'SO/BB': so_bb})
                     return res
 
             stats_A = get_pk_stats(p1_sel, is_pk_batter)
@@ -6422,8 +6322,12 @@ with tab6:
                 def make_row(stat_key, label, format_str, lower_is_better=False):
                     val_a = stats_A[stat_key]
                     val_b = stats_B[stat_key]
-                    str_a = format_str.format(val_a)
-                    str_b = format_str.format(val_b)
+                    
+                    if stat_key == 'SO/BB' and val_a == float('inf'): str_a = "∞"
+                    else: str_a = format_str.format(val_a)
+                    
+                    if stat_key == 'SO/BB' and val_b == float('inf'): str_b = "∞"
+                    else: str_b = format_str.format(val_b)
                     
                     style_green = "background-color:#e8f4e9; font-weight:bold; color:#2e7d32;"
                     style_normal = "color:#eeeeee;"
@@ -6457,7 +6361,7 @@ with tab6:
                     
                     return f"<tr><td style='text-align:center; padding:5px; border-bottom:1px solid #444; {final_style_a} font-size:14px;'>{str_a}</td><td style='text-align:center; padding:5px; border-bottom:1px solid #444; font-weight:bold; color:#aaa; font-size:12px;'>{label}</td><td style='text-align:center; padding:5px; border-bottom:1px solid #444; {final_style_b} font-size:14px;'>{str_b}</td></tr>"
 
-                html_table = f"<div style='background-color:#1e1e1e; padding:15px; border-radius:10px; border:1px solid #444; max-width:650px; margin:0 auto;'><table style='width:100%; border-collapse:collapse; font-family:sans-serif;'><tr><td style='text-align:center; padding-bottom:10px; width:35%;'><h4 style='color:#00e5ff; margin:0;'>{p1_sel}</h4></td><td style='text-align:center; padding-bottom:10px; width:30%;'><span style='color:gray; font-size:12px; letter-spacing:1px;'>STATHEAD</span></td><td style='text-align:center; padding-bottom:10px; width:35%;'><h4 style='color:#ff4b4b; margin:0;'>{p2_sel}</h4></td></tr><tr><td colspan='3' style='text-align:center; padding:6px; color:#ff4b4b; font-size:15px; font-weight:bold; border-bottom:1px solid #444; border-top:2px solid #555;'>Overall Stats</td></tr>"
+                html_table = f"<div style='background-color:#1e1e1e; padding:15px; border-radius:10px; border:1px solid #444; max-width:650px; margin:0 auto;'><table style='width:100%; border-collapse:collapse; font-family:sans-serif;'><tr><td style='text-align:center; padding-bottom:10px; width:35%;'><h4 style='color:#00e5ff; margin:0;'>{stats_A['DisplayName']}</h4></td><td style='text-align:center; padding-bottom:10px; width:30%;'><span style='color:gray; font-size:12px; letter-spacing:1px;'>STATHEAD</span></td><td style='text-align:center; padding-bottom:10px; width:35%;'><h4 style='color:#ff4b4b; margin:0;'>{stats_B['DisplayName']}</h4></td></tr><tr><td colspan='3' style='text-align:center; padding:6px; color:#ff4b4b; font-size:15px; font-weight:bold; border-bottom:1px solid #444; border-top:2px solid #555;'>Overall Stats</td></tr>"
                 
                 if is_pk_batter:
                     html_table += make_row('WAR', 'WAR', "{:.1f}")
@@ -6483,7 +6387,7 @@ with tab6:
                     html_table += make_row('SO', 'SO', "{:.0f}")
                     html_table += make_row('WHIP', 'WHIP', "{:.2f}", lower_is_better=True)
                     html_table += make_row('FIP', 'FIP', "{:.2f}", lower_is_better=True)
-                    html_table += make_row('SO/9', 'K/9', "{:.1f}")
+                    html_table += make_row('SO/BB', 'SO/BB', "{:.2f}")
 
                 aw_A = stats_A['Awards']
                 aw_B = stats_B['Awards']

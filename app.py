@@ -59,19 +59,19 @@ if "lineup_pos" not in st.session_state: st.session_state.lineup_pos = saved_dat
 @st.cache_resource
 def get_sheet():
     try:
-        # 1. 雲端模式：將 Streamlit Secrets 裡的字串轉回 JSON 字典
-        import json
-        credentials = json.loads(st.secrets["GOOGLE_CREDENTIALS"])
+        # 1. 雲端模式：直接讀取 Streamlit 解析好的字典
+        credentials = dict(st.secrets["gcp_service_account"])
         gc = gspread.service_account_from_dict(credentials)
         return gc.open(SHEET_NAME)
-    
-    except Exception as e:
+        
+    except Exception as e_cloud:
         try:
-            # 2. 本地端模式：如果您在自己電腦上跑，就讀取 baseball.json 檔案
+            # 2. 本地模式：如果雲端找不到 (例如在您自己電腦測試)，就讀取檔案
             gc = gspread.service_account(filename=SERVICE_ACCOUNT_FILE)
             return gc.open(SHEET_NAME)
         except Exception as e_local:
-            st.error(f"Google Sheets 連線失敗！請檢查金鑰。錯誤訊息：{e_local}")
+            # 如果兩邊都失敗，把真正的錯誤訊息印在畫面上方便我們追蹤！
+            st.error(f"連線失敗！\n雲端錯誤: {e_cloud}\n本地錯誤: {e_local}")
             raise e_local
 @st.cache_data(ttl=600)
 def get_raw_records(worksheet_name):

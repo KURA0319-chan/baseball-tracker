@@ -56,11 +56,25 @@ if "pitchers" not in st.session_state: st.session_state.pitchers = saved_data.ge
 if "lineups" not in st.session_state: st.session_state.lineups = saved_data.get("lineups", {'LAA': ["" for _ in range(9)], 'LAD': ["" for _ in range(9)]})
 if "lineup_pos" not in st.session_state: st.session_state.lineup_pos = saved_data.get("lineup_pos", {'LAA': ["DH" for _ in range(9)], 'LAD': ["DH" for _ in range(9)]})
 
+# ✨ 全新雙棲連線函數：同時支援本地開發與雲端部署
 @st.cache_resource
 def get_sheet():
-    gc = gspread.service_account(filename=SERVICE_ACCOUNT_FILE)
-    return gc.open(SHEET_NAME)
-
+    # 1. 先嘗試讀取 Streamlit Cloud 的 Secrets (雲端模式)
+    try:
+        # 如果您的 secrets.toml 裡的標籤是 [gcp_service_account]，請保持這行
+        credentials = dict(st.secrets["gcp_service_account"])
+        gc = gspread.service_account_from_dict(credentials)
+        return gc.open(SHEET_NAME)
+    
+    # 2. 如果報錯 (代表在本地端開發，或是 Secrets 沒設好)，退回讀取實體檔案模式
+    except Exception as e:
+        try:
+            gc = gspread.service_account(filename=SERVICE_ACCOUNT_FILE)
+            return gc.open(SHEET_NAME)
+        except Exception as e_local:
+            # 如果兩邊都失敗，印出錯誤訊息方便除錯
+            st.error(f"Google Sheets 連線失敗！請檢查金鑰。錯誤訊息：{e_local}")
+            raise e_local
 @st.cache_data(ttl=600)
 def get_raw_records(worksheet_name):
     try:
